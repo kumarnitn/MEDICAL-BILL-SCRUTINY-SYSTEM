@@ -35,8 +35,10 @@ data/processed/bills/
 "Sample Bill (1)_repaired.pdf"
 *.pdf
 
-# SQLite database (generated at runtime from the PDFs)
-data/processed/medical_bills.db
+# SQLite database — allow the pre-built reference DB (CGHS rates + hospitals)
+# to be committed so deployments work without source PDFs.
+# !data/processed/medical_bills.db  ← un-comment to exclude again
+
 
 # Resolved/temporary analysis files
 *.resolved

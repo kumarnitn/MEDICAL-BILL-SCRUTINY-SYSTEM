@@ -78,7 +78,7 @@
             <div class="header-actions">
                 <div class="status-indicator" id="ai-status">
                     <span class="status-dot"></span>
-                    <span class="status-text">AI Ready</span>
+                    <span class="status-text">Checking…</span>
                 </div>
             </div>
         </div>
@@ -87,12 +87,17 @@
     <!-- Main Content -->
     <main class="main-content">
 
-        <!-- Dashboard Tab -->
+        <!-- ══════════════════════════════════════
+             DASHBOARD TAB
+             All content is dynamically rendered by JS.
+             No hardcoded patient/bill data here.
+             ══════════════════════════════════════ -->
         <section class="tab-content active" id="tab-dashboard">
-            <!-- Bill Selector (populated when multiple bills exist) -->
+
+            <!-- Bill Selector (shown when > 1 bill exists) -->
             <div id="bill-selector"></div>
 
-            <!-- Stats Row -->
+            <!-- Stats Row — populated dynamically from OCR extraction -->
             <div class="stats-grid" id="stats-grid">
                 <div class="stat-card" id="stat-total-bills">
                     <div class="stat-icon blue">
@@ -117,7 +122,7 @@
                     </div>
                     <div class="stat-data">
                         <span class="stat-number" id="passed-count">0</span>
-                        <span class="stat-label">Passed</span>
+                        <span class="stat-label">Rules Passed</span>
                     </div>
                 </div>
                 <div class="stat-card" id="stat-flagged">
@@ -132,7 +137,7 @@
                     </div>
                     <div class="stat-data">
                         <span class="stat-number" id="flagged-count">0</span>
-                        <span class="stat-label">Flagged</span>
+                        <span class="stat-label">Issues / Flagged</span>
                     </div>
                 </div>
                 <div class="stat-card" id="stat-total-amount">
@@ -150,181 +155,25 @@
                 </div>
             </div>
 
-            <!-- Bill Detail Panel -->
+            <!--
+                Bill Detail Container.
+                JS renders the full detail panel here (or the empty-state if no bills).
+                This is intentionally left as a shell — all content is dynamic.
+            -->
             <div class="bill-detail-container" id="bill-detail-container">
-                <div class="detail-header">
-                    <h2 id="detail-title">Bill Analysis</h2>
-                    <div class="detail-badge" id="detail-status-badge">
-                        <span class="badge-dot"></span>
-                        <span class="badge-text">Processing</span>
-                    </div>
-                </div>
-
-                <div class="detail-grid">
-                    <!-- Patient Card -->
-                    <div class="info-card" id="patient-card">
-                        <div class="card-header">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2">
-                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                                <circle cx="12" cy="7" r="4" />
-                            </svg>
-                            <h3>Patient Details</h3>
-                        </div>
-                        <div class="card-body" id="patient-info">
-                            <div class="info-row"><span class="info-label">Name</span><span class="info-value"
-                                    id="p-name">—</span></div>
-                            <div class="info-row"><span class="info-label">Age / Gender</span><span class="info-value"
-                                    id="p-age-gender">—</span></div>
-                            <div class="info-row"><span class="info-label">Employee ID</span><span class="info-value"
-                                    id="p-emp-id">—</span></div>
-                            <div class="info-row"><span class="info-label">MRN / UHID</span><span class="info-value"
-                                    id="p-uhid">—</span></div>
-                            <div class="info-row"><span class="info-label">Relationship</span><span class="info-value"
-                                    id="p-relation">—</span></div>
-                        </div>
-                    </div>
-
-                    <!-- Hospital Card -->
-                    <div class="info-card" id="hospital-card">
-                        <div class="card-header">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2">
-                                <path
-                                    d="M3 21h18M9 8h1M9 12h1M9 16h1M14 8h1M14 12h1M14 16h1M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16" />
-                            </svg>
-                            <h3>Hospital</h3>
-                        </div>
-                        <div class="card-body" id="hospital-info">
-                            <div class="info-row"><span class="info-label">Name</span><span class="info-value"
-                                    id="h-name">—</span></div>
-                            <div class="info-row"><span class="info-label">City</span><span class="info-value"
-                                    id="h-city">—</span></div>
-                            <div class="info-row"><span class="info-label">Empanelled</span><span class="info-value"
-                                    id="h-empanelled">—</span></div>
-                            <div class="info-row"><span class="info-label">NABH</span><span class="info-value"
-                                    id="h-nabh">—</span></div>
-                        </div>
-                    </div>
-
-                    <!-- Admission Card -->
-                    <div class="info-card" id="admission-card">
-                        <div class="card-header">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2">
-                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                                <line x1="16" y1="2" x2="16" y2="6" />
-                                <line x1="8" y1="2" x2="8" y2="6" />
-                                <line x1="3" y1="10" x2="21" y2="10" />
-                            </svg>
-                            <h3>Admission</h3>
-                        </div>
-                        <div class="card-body" id="admission-info">
-                            <div class="info-row"><span class="info-label">Admitted</span><span class="info-value"
-                                    id="a-admitted">—</span></div>
-                            <div class="info-row"><span class="info-label">Discharged</span><span class="info-value"
-                                    id="a-discharged">—</span></div>
-                            <div class="info-row"><span class="info-label">Stay</span><span class="info-value"
-                                    id="a-stay">—</span></div>
-                            <div class="info-row"><span class="info-label">Diagnosis</span><span
-                                    class="info-value diagnosis-text" id="a-diagnosis">—</span></div>
-                            <div class="info-row"><span class="info-label">Doctor</span><span class="info-value"
-                                    id="a-doctor">—</span></div>
-                        </div>
-                    </div>
-
-                    <!-- Financial Card -->
-                    <div class="info-card financial-card" id="financial-card">
-                        <div class="card-header">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2">
-                                <line x1="12" y1="1" x2="12" y2="23" />
-                                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-                            </svg>
-                            <h3>Financial Summary</h3>
-                        </div>
-                        <div class="card-body" id="financial-info">
-                            <div class="info-row"><span class="info-label">Bill Number</span><span
-                                    class="info-value mono" id="f-bill-no">—</span></div>
-                            <div class="info-row"><span class="info-label">Bill Date</span><span class="info-value"
-                                    id="f-bill-date">—</span></div>
-                            <div class="info-row total-row"><span class="info-label">Total Amount</span><span
-                                    class="info-value amount" id="f-total">—</span></div>
-                            <div class="info-row"><span class="info-label">Discount</span><span class="info-value"
-                                    id="f-discount">—</span></div>
-                            <div class="info-row"><span class="info-label">Net Amount</span><span
-                                    class="info-value amount" id="f-net">—</span></div>
-                            <div class="info-row"><span class="info-label">Advance</span><span class="info-value"
-                                    id="f-advance">—</span></div>
-                            <div class="info-row"><span class="info-label">Balance</span><span class="info-value"
-                                    id="f-balance">—</span></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Line Items -->
-                <div class="line-items-section" id="line-items-section">
-                    <div class="section-header">
-                        <h3>Line Items Breakdown</h3>
-                        <span class="item-count" id="item-count">0 items</span>
-                    </div>
-                    <div class="line-items-table-wrapper">
-                        <table class="line-items-table" id="line-items-table">
-                            <thead>
-                                <tr>
-                                    <th>Type</th>
-                                    <th>Description</th>
-                                    <th>Qty</th>
-                                    <th class="align-right">Amount (₹)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="line-items-body">
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- Validation Results -->
-                <div class="validation-section" id="validation-section">
-                    <div class="section-header">
-                        <h3>Validation Results</h3>
-                        <div class="validation-summary" id="validation-summary">
-                            <span class="v-passed">0 Passed</span>
-                            <span class="v-sep">·</span>
-                            <span class="v-failed">0 Failed</span>
-                            <span class="v-sep">·</span>
-                            <span class="v-warnings">0 Warnings</span>
-                        </div>
-                    </div>
-                    <div class="validation-grid" id="validation-grid">
-                        <!-- Populated by JS -->
-                    </div>
-                </div>
-
-                <!-- Extraction Metadata -->
-                <div class="metadata-section" id="metadata-section">
-                    <div class="section-header">
-                        <h3>Extraction Metadata</h3>
-                    </div>
-                    <div class="metadata-grid">
-                        <div class="meta-item"><span class="meta-label">Method</span><span class="meta-value"
-                                id="m-method">—</span></div>
-                        <div class="meta-item"><span class="meta-label">OCR Confidence</span><span class="meta-value"
-                                id="m-confidence">—</span></div>
-                        <div class="meta-item"><span class="meta-label">Pages</span><span class="meta-value"
-                                id="m-pages">—</span></div>
-                        <div class="meta-item"><span class="meta-label">Model</span><span class="meta-value"
-                                id="m-model">—</span></div>
-                        <div class="meta-item"><span class="meta-label">Timestamp</span><span class="meta-value"
-                                id="m-timestamp">—</span></div>
-                        <div class="meta-item"><span class="meta-label">Source File</span><span class="meta-value"
-                                id="m-source">—</span></div>
-                    </div>
+                <!-- Populated by renderDashboard() in app.js -->
+                <!-- Skeleton loader shown while loading -->
+                <div class="loading-skeleton">
+                    <div class="skeleton-line wide"></div>
+                    <div class="skeleton-line medium"></div>
+                    <div class="skeleton-line narrow"></div>
                 </div>
             </div>
         </section>
 
-        <!-- Upload Tab -->
+        <!-- ══════════════════════════════════════
+             UPLOAD TAB
+             ══════════════════════════════════════ -->
         <section class="tab-content" id="tab-upload">
             <div class="upload-container">
                 <div class="upload-zone" id="upload-zone">
@@ -337,13 +186,13 @@
                         </svg>
                     </div>
                     <h2>Upload Medical Bill</h2>
-                    <p>Drag & drop a scanned PDF bill, or click to browse</p>
+                    <p>Drag &amp; drop a scanned PDF bill, or click to browse</p>
                     <p class="upload-formats">Supports: PDF (scanned or text-based)</p>
                     <input type="file" id="file-input" accept=".pdf" hidden>
                     <button class="btn btn-primary" id="browse-btn">Browse Files</button>
                 </div>
 
-                <!-- Processing Pipeline -->
+                <!-- Processing Pipeline — shown after upload -->
                 <div class="pipeline-container hidden" id="pipeline-container">
                     <h2>Processing Pipeline</h2>
                     <div class="pipeline-steps">
@@ -351,7 +200,7 @@
                             <div class="step-icon">🔧</div>
                             <div class="step-info">
                                 <h4>PDF Repair</h4>
-                                <p class="step-status">Waiting...</p>
+                                <p class="step-status">Waiting…</p>
                             </div>
                             <div class="step-progress">
                                 <div class="progress-bar"></div>
@@ -361,7 +210,7 @@
                             <div class="step-icon">📷</div>
                             <div class="step-info">
                                 <h4>OCR Extraction</h4>
-                                <p class="step-status">Waiting...</p>
+                                <p class="step-status">Waiting…</p>
                             </div>
                             <div class="step-progress">
                                 <div class="progress-bar"></div>
@@ -371,7 +220,7 @@
                             <div class="step-icon">🤖</div>
                             <div class="step-info">
                                 <h4>AI Structuring (Phi-3)</h4>
-                                <p class="step-status">Waiting...</p>
+                                <p class="step-status">Waiting…</p>
                             </div>
                             <div class="step-progress">
                                 <div class="progress-bar"></div>
@@ -381,7 +230,7 @@
                             <div class="step-icon">✅</div>
                             <div class="step-info">
                                 <h4>Rule Validation</h4>
-                                <p class="step-status">Waiting...</p>
+                                <p class="step-status">Waiting…</p>
                             </div>
                             <div class="step-progress">
                                 <div class="progress-bar"></div>
@@ -421,18 +270,21 @@
             </div>
         </section>
 
-        <!-- Rules Tab -->
+        <!-- ══════════════════════════════════════
+             RULES TAB
+             ══════════════════════════════════════ -->
         <section class="tab-content" id="tab-rules">
             <div class="rules-container">
                 <div class="rules-header">
                     <h2>Validation Rules Engine</h2>
-                    <p>39 rules across 15 categories derived from CIL/SECL rule documents</p>
+                    <p>39 rules across 10 categories derived from CIL/SECL CPRMSE rule documents</p>
                 </div>
                 <div class="rules-grid" id="rules-grid">
-                    <!-- Populated by JS -->
+                    <!-- Populated dynamically from VALIDATION_RULES_CATALOG in app.js -->
                 </div>
             </div>
         </section>
+
     </main>
 
     <script src="app.js"></script>

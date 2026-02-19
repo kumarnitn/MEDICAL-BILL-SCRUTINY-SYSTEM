@@ -375,60 +375,114 @@ class RuleBasedExtractor:
     def _extract_patient(self, text: str) -> PatientInfo:
         """Extract patient information."""
         p = PatientInfo()
-        
+
+        # Priority order matters — explicit labelled fields are most reliable.
+        # The SECL cover-letter format says:
+        #   "Medical Bill Payment of Mr. Anil Kumar Pandey"
+        # The hospital bill page 2 says:
+        #   "Patient Name- Mr. Anil Kumar Pandey"
+        # Bare "Mr." on a garbled OCR page is the LEAST reliable.
+        # NAME_END_LOOKAHEAD: pattern of what always follows a name in these bills
+        # — a field label, colon, or end-of-line
+        _NAME_END = r'(?=\s*(?:Bill|Date|MRN|UHID|Age|Ward|Ref|DOB|IP|INV|Inv|\d|\n|$))'
+
         p.name = self._extract_field(text, [
-            r'Patient\s*(?:Name|\'s?\s*Name)\s*[.:]*\s*([A-Z][A-Za-z\s.]+?)(?:\s{2,}|\n)',
-            r'Name\s+of\s+(?:Patient|the\s+Patient)\s*[.:]*\s*([A-Z][A-Za-z\s.]+?)(?:\s{2,}|\n)',
-            r'Mr\.\s*([A-Z][A-Za-z\s.]+?)(?:\s{2,}|\n)',
-            r'Mrs\.\s*([A-Z][A-Za-z\s.]+?)(?:\s{2,}|\n)',
-            r'Ms\.\s*([A-Z][A-Za-z\s.]+?)(?:\s{2,}|\n)',
+            # 1. Explicit 'Patient Name' label (highest priority)
+            r'Patient\s*Name\s*[-:]*\s*(?:Mr\.?|Mrs?\.?|Ms\.?|Shri\.?|Smt\.?)?\s*([A-Z][A-Za-z]+(?: [A-Za-z]+){1,4})' + _NAME_END,
+            # 2. Name of the Patient label
+            r'Name\s+of\s+(?:Patient|the\s+Patient)\s*[-:]*\s*(?:Mr\.?|Mrs?\.?|Ms\.?)?\s*([A-Z][A-Za-z]+(?: [A-Za-z]+){1,4})' + _NAME_END,
+            # 3. SECL cover-letter: "Medical Bill Payment of Mr. Anil Kumar Pandey"
+            r'Bill\s+Payment\s+of\s+(?:Mr\.?|Mrs?\.?|Ms\.?|Shri\.?|Smt\.?)\s*([A-Z][A-Za-z]+(?: [A-Za-z]+){1,3})(?=\s*[,\n.\t]|$)',
+            # 4. Generic "Payment of Mr. ..."
+            r'Payment\s+of\s+(?:Mr\.?|Mrs?\.?|Ms\.?|Shri\.?|Smt\.?)\s*([A-Z][A-Za-z]+(?: [A-Za-z]+){1,3})(?=\s*[,\n.\t]|$)',
+            # 5. Shri/Smt with employee number: "Shri Anil Kumar Pandey (90262908)"
+            r'Shri\s+([A-Z][A-Za-z]+(?: [A-Za-z]+){1,3})\s*\(\d{7,}\)',
+            # 6. Mr./Mrs. prefix — only if followed by properly-cased words then line end / non-word
+            r'(?:Mr\.?|Mrs?\.?|Ms\.?)\s+([A-Z][a-z]{2,}(?: [A-Z][a-z]{2,}){1,3})(?=[^\w]|\n|$)',
         ])
-        
+
         p.age = self._extract_field(text, [
-            r'Age\s*[.:]*\s*(\d{1,3}\s*(?:Y(?:ears?|rs?)?|M(?:onths?)?|D(?:ays?)?))',
+            r'Age\s*[-:]*\s*(\d{1,3}\s*(?:Y(?:ears?|rs?)?|M(?:onths?)?|D(?:ays?)?))',
             r'(\d{1,3})\s*(?:years?|yrs?)\s*(?:old)?',
         ])
-        
+
         p.gender = self._extract_field(text, [
-            r'(?:Sex|Gender)\s*[.:]*\s*(Male|Female|M|F)',
+            r'(?:Sex|Gender)\s*[-:]*\s*(Male|Female|M|F)(?:\b|\W)',
         ])
-        
+
         p.uhid = self._extract_field(text, [
-            r'(?:UHID|MRN|MR\s*No|Patient\s*ID|Reg\s*No)\s*[.:]*\s*(\S+)',
+            # Common hospital MRN formats: BMC0049654, MRN-12345, UHID: 12345
+            r'(?:UHID|MRN|MR\s*No|Patient\s*ID|Reg\s*No)\s*[-:]*\s*((?:[A-Z]{2,5})?\d{4,})',
+            r'MRN-\s*(\w+)',
         ])
-        
+
         p.ip_number = self._extract_field(text, [
-            r'(?:IP\s*No|IPD\s*No|Admission\s*No|Indoor\s*No)\s*[.:]*\s*(\S+)',
+            r'(?:IP\s*No|IPD\s*No|Admission\s*No|Indoor\s*No)\s*[-:]*\s*(\S+)',
         ])
-        
+
         return p
     
     def _extract_hospital(self, text: str) -> HospitalInfo:
         """Extract hospital information."""
         h = HospitalInfo()
-        
-        # Hospital name is usually in the first few lines
+
+        # --- Hospital Name ---
+        # Strategy 1: Look for a clean line containing hospital keywords,
+        #   stripped of leading OCR symbols (@, *, #, unicode noise).
+        #   Search through early pages (up to 300 lines).
         lines = text.split('\n')
-        for line in lines[:15]:
-            line = line.strip()
-            if not line:
+        best_name = ''
+        for line in lines[:300]:
+            raw = line.strip()
+            if not raw:
                 continue
-            # Hospital name heuristics
-            if re.search(r'(Hospital|Medical|Institute|Centre|Center|Clinic|Healthcare|Nursing)', line, re.IGNORECASE):
-                if len(line) > 5 and not re.search(r'(Patient|Date|Bill|Discharge|Admission)', line, re.IGNORECASE):
-                    h.name = line.strip()
-                    break
-        
+            # Strip leading non-alphabetic symbols (OCR garbage like '@ ', '} ', etc.)
+            cleaned = re.sub(r'^[^A-Za-z]+', '', raw).strip()
+            if not cleaned:
+                continue
+            # Must contain a hospital keyword
+            if not re.search(r'(Hospital|Medical|Institute|Centre|Center|Clinic|Healthcare|Nursing|Foundation|Medicare)',
+                             cleaned, re.IGNORECASE):
+                continue
+            # Must NOT be a patient/bill line
+            if re.search(r'(Patient|Bill\s+No|Discharge|Admission|Date|Invoice|Amount|UHID|MRN)',
+                         cleaned, re.IGNORECASE):
+                continue
+            # Prefer shorter, cleaner lines (no special chars)
+            if len(cleaned) > 80:
+                continue
+            # Strip trailing OCR noise (non-word characters)
+            cleaned = re.sub(r'[\s@*#|_\u2018\u2019\u201c\u201d\u2014\u2013]+$', '', cleaned).strip()
+            if len(cleaned) > 5:
+                best_name = cleaned
+                break
+
+        h.name = best_name
+
+        # --- City ---
+        # Patterns like "Naya Raipur", "Sector-36, Naya Raipur", "ABC City, State"
+        h.city = self._extract_field(text, [
+            r'(?:Sector[\-\s]*\d+,\s*)([A-Z][A-Za-z\s]+)(?:,|\n)',   # Sector-36, Naya Raipur
+            r'(?:Hospital|Medical|Centre)[^,\n]+,\s*([A-Z][A-Za-z\s]+)(?:,|\n)',
+            r'([A-Z][A-Za-z\s]+)\s*(?:CG|MP|UP|MH|TN|KA|AP|WB|RJ|GJ|HR|PB)\b',  # city followed by state abbr
+            r'\bRaipur\b|\bBilaspur\b|\bMumbai\b|\bDelhi\b|\bChennai\b',          # direct match
+        ]) or ''
+
+        # If city matched the full state-pattern, extract just the city part
+        if h.city and re.search(r'\b(CG|MP|UP|MH|TN|KA|AP|WB|RJ|GJ|HR|PB)\b', h.city):
+            h.city = re.sub(r'\s*\b(CG|MP|UP|MH|TN|KA|AP|WB|RJ|GJ|HR|PB)\b.*', '', h.city).strip()
+
         h.phone = self._extract_field(text, [
-            r'(?:Ph|Tel|Phone|Contact)\s*[.:]*\s*([\d\s/\-+,()]+)',
+            r'(?:Ph|Tel|Phone|Contact|Mob)\s*[.:]*\s*([\d\s/\-+,()]{8,})',
         ])
-        
+
         h.registration_number = self._extract_field(text, [
             r'(?:Reg|Registration)\s*(?:No|Number)\s*[.:]*\s*(\S+)',
         ])
-        
+
         return h
-    
+
+
     def _extract_admission(self, text: str) -> AdmissionInfo:
         """Extract admission details."""
         a = AdmissionInfo()
@@ -959,12 +1013,97 @@ class BillExtractionPipeline:
         
         return bill
     
+    @staticmethod
+    def _clean_patient_name(raw: str) -> str:
+        """
+        Post-process a raw extracted patient name to remove OCR noise.
+
+        Rules:
+        - Strip leading/trailing whitespace and honorific titles
+        - Each word must be all-alphabetic (no digits, no special chars)
+        - Each word must be >= 3 characters (eliminates single-char OCR garbage)
+        - The cleaned name must have at least 2 words
+        - Known OCR noise syllables (e.g., 'ving', 'andty', 'ze') are removed
+        """
+        # Strip titles / honorifics
+        name = re.sub(
+            r'^(?:Mr\.?|Mrs?\.?|Ms\.?|Shri\.?|Smt\.?|Dr\.?|Prof\.?)\s*',
+            '', raw, flags=re.IGNORECASE
+        ).strip()
+
+        # Known OCR noise tokens — lowercase matches
+        KNOWN_NOISE = {
+            'ving', 'ze', 'ra', 'andty', 'ancy', 'ang', 'ane', 'ng', 'vy',
+            'yj', 'jf', 'flt', 'tlt', 'lt', 'lf', 'lft', 'fr', 'ile', 'le',
+            'ke', 'jk', 'ji', 'ds', 'sd', 'fn', 'nf', 'xx', 'xz', 'zx',
+        }
+
+        # Also strip trailing field-label words that bleed into a name
+        LABEL_WORDS = {'bill', 'date', 'ward', 'ref', 'mrn', 'uhid', 'age',
+                       'dob', 'gender', 'sex', 'diagnosis', 'admission', 'discharge'}
+
+        clean_words = []
+        for w in name.split():
+            # Must be all-alphabetic (allow hyphens for double-barrelled names)
+            if not re.match(r'^[A-Za-z][A-Za-z\-]*$', w): continue
+            # Must be at least 3 characters
+            if len(w) < 3: continue
+            # Must not be a known noise syllable or field label
+            if w.lower() in KNOWN_NOISE: continue
+            if w.lower() in LABEL_WORDS: break   # stop at first label word
+            clean_words.append(w)
+
+        if len(clean_words) < 2:
+            # Cleaning was too aggressive — return the raw best-effort title-cased name
+            return raw.strip().title()
+
+        return ' '.join(clean_words).title()
+
+    @staticmethod
+    def _clean_hospital_name(raw: str) -> str:
+        """
+        Strip OCR noise from extracted hospital name.
+        - Remove trailing garbage tokens (single chars, numbers, special chars)
+        - Collapse internal whitespace
+        """
+        if not raw:
+            return raw
+        # Remove unicode noise and non-printable chars
+        cleaned = re.sub(r'[\u2018\u2019\u201c\u201d\u2014\u2013\u00e2\u0080\u0099]+', '', raw)
+        # Remove leading non-alphabetic characters
+        cleaned = re.sub(r'^[^A-Za-z]+', '', cleaned).strip()
+        # Split into tokens and drop garbage at the end
+        tokens = cleaned.split()
+        good_tokens = []
+        for t in tokens:
+            # Stop at the first token that is clearly garbage:
+            # - only 1-2 chars (single letters or numbers)
+            # - contains only non-alphabetic characters
+            # - looks like a formatting artefact
+            stripped = re.sub(r'[^A-Za-z0-9]', '', t)
+            if len(stripped) <= 2:
+                break
+            if re.match(r'^[\d,._\-@|]+$', t):
+                break
+            good_tokens.append(t)
+        return ' '.join(good_tokens).strip()
+
     def _post_process(self, bill: ExtractedBill) -> ExtractedBill:
         """Clean and validate extracted data."""
-        # Clean patient name
+        # Clean patient name — remove OCR noise and title-case
         if bill.patient.name:
-            bill.patient.name = bill.patient.name.strip().title()
-        
+            bill.patient.name = self._clean_patient_name(bill.patient.name)
+
+        # Clean hospital name — strip trailing OCR garbage
+        if bill.hospital.name:
+            bill.hospital.name = self._clean_hospital_name(bill.hospital.name)
+
+        # Clean city — take only the first line, strip state abbreviation
+        if bill.hospital.city:
+            city = bill.hospital.city.split('\n')[0].strip()
+            city = re.sub(r'\s*\b(?:SECL|CIL|Ltd|Limited|Pvt)\b.*', '', city, flags=re.IGNORECASE).strip()
+            bill.hospital.city = city
+
         # Calculate length of stay
         if bill.admission.admission_date and bill.admission.discharge_date:
             try:

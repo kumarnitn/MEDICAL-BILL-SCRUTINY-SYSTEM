@@ -1408,3 +1408,397 @@ body {
 .bill-selector-btn.active .bill-sel-amount {
     color: var(--accent-secondary);
 }
+
+/* ============================================================
+   EMPTY STATE — shown when no bills have been uploaded yet
+   ============================================================ */
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 24px;
+    text-align: center;
+    gap: 16px;
+}
+
+.empty-icon {
+    width: 100px;
+    height: 100px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-glow);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 50%;
+    color: var(--accent-tertiary);
+    margin-bottom: 8px;
+}
+
+.empty-state h3 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.empty-state p {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    max-width: 400px;
+    line-height: 1.7;
+}
+
+/* ============================================================
+   SKELETON LOADER — shown during initial page load
+   ============================================================ */
+.loading-skeleton {
+    padding: 48px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    align-items: center;
+}
+
+.skeleton-line {
+    height: 16px;
+    border-radius: 8px;
+    background: linear-gradient(90deg,
+            var(--bg-glass) 0%,
+            rgba(99, 102, 241, 0.08) 50%,
+            var(--bg-glass) 100%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+.skeleton-line.wide {
+    width: 70%;
+}
+
+.skeleton-line.medium {
+    width: 50%;
+}
+
+.skeleton-line.narrow {
+    width: 35%;
+}
+
+@keyframes skeleton-shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+/* ============================================================
+   CONFIDENCE SCORE HIGHLIGHTING ON INFO VALUES
+   ============================================================ */
+
+/* Low confidence — red glow */
+.info-value.conf-low {
+    color: var(--danger) !important;
+    background: var(--danger-bg);
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--danger-border);
+    cursor: help;
+    position: relative;
+}
+
+/* High confidence — no extra styling needed; tooltip via title attr */
+
+/* ============================================================
+   CONFIDENCE PANEL — bar chart for all field scores
+   ============================================================ */
+.confidence-panel-section {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+}
+
+.conf-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.conf-row {
+    display: grid;
+    grid-template-columns: 160px 1fr 48px;
+    align-items: center;
+    gap: 12px;
+}
+
+.conf-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.conf-bar-wrap {
+    height: 8px;
+    background: var(--bg-glass-border);
+    border-radius: 100px;
+    overflow: hidden;
+}
+
+.conf-bar {
+    height: 100%;
+    border-radius: 100px;
+    transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.conf-bar.high {
+    background: var(--success);
+}
+
+.conf-bar.medium {
+    background: var(--warning);
+}
+
+.conf-bar.low {
+    background: var(--danger);
+}
+
+.conf-score {
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-align: right;
+}
+
+.conf-score.high {
+    color: var(--success);
+}
+
+.conf-score.medium {
+    color: var(--warning);
+}
+
+.conf-score.low {
+    color: var(--danger);
+}
+
+.conf-hint {
+    margin-top: 12px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+/* ============================================================
+   REVIEW ACTION BAR — sits between confidence panel and edit panel
+   ============================================================ */
+.review-action-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 24px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.04), rgba(139, 92, 246, 0.04));
+    border-bottom: 1px solid var(--border);
+}
+
+.review-hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+/* ============================================================
+   EDIT PANEL — slide-in review + edit form
+   ============================================================ */
+.edit-panel {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    border-bottom: none;
+}
+
+.edit-panel.open {
+    max-height: 2000px;
+    border-bottom: 1px solid var(--border);
+}
+
+.edit-panel-header {
+    padding: 20px 24px 4px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.06), rgba(139, 92, 246, 0.06));
+}
+
+.edit-panel-header h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.edit-subtitle {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.low-conf-label {
+    color: var(--danger);
+    font-weight: 600;
+}
+
+.edit-fields {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0;
+    padding: 16px 24px;
+}
+
+.edit-field-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 12px;
+    border-radius: var(--radius-sm);
+    transition: background var(--transition-fast);
+}
+
+.edit-field-row:hover {
+    background: var(--bg-glass);
+}
+
+.edit-field-row.conf-alert {
+    background: rgba(248, 113, 113, 0.04);
+    border-left: 3px solid var(--danger-border);
+}
+
+.edit-field-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.low-conf-icon {
+    font-size: 0.85rem;
+}
+
+.field-conf-badge {
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    padding: 2px 6px;
+    border-radius: 100px;
+    font-weight: 700;
+}
+
+.field-conf-badge.low {
+    background: var(--danger-bg);
+    color: var(--danger);
+    border: 1px solid var(--danger-border);
+}
+
+.field-conf-badge.ok {
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid var(--success-border);
+}
+
+.edit-field-input {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 0.88rem;
+    padding: 8px 12px;
+    width: 100%;
+    outline: none;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.edit-field-input:focus {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.edit-field-input.low-conf-input {
+    border-color: var(--danger-border);
+    background: rgba(248, 113, 113, 0.06);
+}
+
+.edit-field-input.low-conf-input:focus {
+    border-color: var(--danger);
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.15);
+}
+
+.edit-field-input::placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.edit-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 12px 24px 20px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.03), rgba(139, 92, 246, 0.03));
+}
+
+/* ============================================================
+   BUTTON VARIANTS
+   ============================================================ */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-sans);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+    color: white;
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+}
+
+.btn-primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #059669, #10b981);
+    color: white;
+    box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
+}
+
+.btn-success:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+}
+
+.btn-ghost:hover:not(:disabled) {
+    background: var(--bg-glass);
+    color: var(--text-primary);
+    border-color: var(--border-hover);
+}

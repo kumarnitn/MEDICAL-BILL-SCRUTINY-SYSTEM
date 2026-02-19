@@ -345,6 +345,53 @@ async def search_hospitals(q: str = Query(..., min_length=2)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/bills/{bill_id}/save")
+async def save_bill(bill_id: str, payload: dict):
+    """
+    Save user-reviewed and potentially edited bill data to disk.
+    Accepts the full bill JSON (including user edits from the frontend review panel).
+    Merges the edited bill back into persistent storage.
+
+    The frontend sends:
+    {
+        ...all extracted bill fields...,
+        "edited_by_user": true,
+        "edit_timestamp": "2026-...",
+        "edits": { "patient.name": "...", ... }  # only changed fields
+    }
+    """
+    global processed_bills
+
+    # Find the existing bill (if any) and update it
+    found = False
+    for i, bill in enumerate(processed_bills):
+        if bill.get("id") == bill_id:
+            # Merge edits into stored bill
+            processed_bills[i] = {**bill, **payload, "id": bill_id}
+            found = True
+            break
+
+    if not found:
+        # Bill not in memory — store it fresh
+        payload["id"] = bill_id
+        processed_bills.append(payload)
+
+    # Persist to disk
+    bill_json_path = os.path.join(BILLS_JSON_DIR, f"{bill_id}.json")
+    try:
+        with open(bill_json_path, 'w', encoding='utf-8') as f:
+            json.dump(processed_bills[i if found else -1], f, indent=2, default=str)
+    except Exception as e:
+        print(f"[SAVE ERROR] Could not persist bill {bill_id}: {e}")
+
+    return {
+        "status": "saved",
+        "bill_id": bill_id,
+        "timestamp": datetime.now().isoformat(),
+        "message": "Bill data saved successfully.",
+    }
+
+
 # ============================================================================
 # Static Files & Dashboard
 # ============================================================================
@@ -502,15 +549,22 @@ async def _process_bill_async(job_id: str):
             "failed": failed,
             "warnings": warnings,
         }
-        
+
+        # === Inject field-level confidence scores ===
+        # These are derived from the overall OCR confidence and whether the
+        # field was actually extracted. Fields with uncertain extraction are
+        # given a slightly lower score so the frontend can highlight them.
+        base = confidence / 100.0  # overall OCR confidence as 0-1
+        bill_dict["confidence_scores"] = _compute_confidence_scores(bill, base)
+
         # Save to disk
         bill_json_path = os.path.join(BILLS_JSON_DIR, f"{bill_id}.json")
         with open(bill_json_path, 'w', encoding='utf-8') as f:
             json.dump(bill_dict, f, indent=2, default=str)
-        
+
         # Add to in-memory list
         processed_bills.append(bill_dict)
-        
+
         # Mark job complete
         job["status"] = "completed"
         job["progress"] = 100
@@ -529,7 +583,62 @@ async def _process_bill_async(job_id: str):
                 step["message"] = f"Error: {str(e)[:200]}"
 
 
+def _compute_confidence_scores(bill, base_confidence: float) -> dict:
+    """
+    Compute per-field confidence scores (0.0 – 1.0) for a bill.
+
+    Strategy:
+    - Start from the overall OCR confidence (base_confidence).
+    - Fields that are missing get 0.0.
+    - Fields that look like OCR garbage (very short, all caps noise, etc.)
+      get penalised down to 0.5–0.6.
+    - Fields that look well-formed get base_confidence or slightly higher.
+    - If the bill was extracted with LLM, scores are bumped up slightly.
+
+    This is a heuristic approximation. A proper implementation would use
+    token-level confidence from Tesseract, but this requires page-level data.
+    """
+    import re
+
+    llm_boost = 0.08 if bill.extraction_method == 'OCR_LLM' else 0.0
+
+    def score_field(value, pattern=None, min_length=2):
+        """Score a single extracted field."""
+        if not value or str(value).strip() in ('', 'None', 'Unknown', '—', 'N/A'):
+            return 0.0
+        v = str(value).strip()
+        if len(v) < min_length:
+            return max(0.45, base_confidence * 0.6)
+        # Gibberish check: high ratio of non-alpha characters
+        alpha_ratio = sum(c.isalpha() for c in v) / max(len(v), 1)
+        if alpha_ratio < 0.15 and not pattern:
+            return max(0.50, base_confidence * 0.65)
+        if pattern and not re.search(pattern, v, re.IGNORECASE):
+            return max(0.55, base_confidence * 0.72)
+        return min(0.99, base_confidence + llm_boost)
+
+    scores = {
+        "patient_name":   score_field(bill.patient.name, r"[A-Za-z]{2,}", min_length=3),
+        "patient_age":    score_field(bill.patient.age, r"\d{1,3}"),
+        "patient_uhid":   score_field(bill.patient.uhid, min_length=4),
+        "employee_id":    score_field(bill.patient.employee_id, r"\d{5,}", min_length=5),
+        "hospital_name":  score_field(bill.hospital.name, r"[A-Za-z]{3,}", min_length=4),
+        "hospital_city":  score_field(bill.hospital.city, r"[A-Za-z]{2,}"),
+        "admission_date": score_field(bill.admission.admission_date,
+                                      r"\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}"),
+        "discharge_date": score_field(bill.admission.discharge_date,
+                                      r"\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}"),
+        "diagnosis":      score_field(bill.admission.diagnosis, min_length=5),
+        "bill_number":    score_field(bill.bill_number, min_length=4),
+        "bill_date":      score_field(bill.bill_date, r"\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}"),
+        "total_amount":   score_field(bill.total_amount, r"\d+"),
+    }
+
+    return {k: round(v, 3) for k, v in scores.items()}
+
+
 def _update_step(job: dict, step_id: str, status: str, message: str):
+
     """Update or add a step in the job's progress."""
     for step in job["steps"]:
         if step["id"] == step_id:
