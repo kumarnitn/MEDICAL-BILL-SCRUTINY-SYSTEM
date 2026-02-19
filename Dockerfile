@@ -8,24 +8,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ghostscript \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements first to leverage Docker layer caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
 COPY . .
 
-# Create runtime directories (uploads, bills, ocr output)
+# Create runtime directories
 RUN mkdir -p data/uploads data/ocr_output data/processed/bills
 
-# Make start script executable
 RUN chmod +x start.sh
 
-# Expose the PORT used by Render (defaults to 8080)
-EXPOSE 8080
+# Koyeb uses port 8000 by default, but we read from $PORT
+EXPOSE 8000
 
-# Entrypoint
 CMD ["./start.sh"]

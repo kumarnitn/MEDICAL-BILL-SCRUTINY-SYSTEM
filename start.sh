@@ -1,8 +1,9 @@
 #!/bin/bash
 set -e
 
-# Default PORT if not set (Render sets $PORT automatically)
-PORT="${PORT:-8080}"
+# Default PORT if not set (Koyeb/Render sets $PORT automatically)
+PORT="${PORT:-8000}"
+
 
 echo "============================================================"
 echo "  MedBill AI — Startup"
