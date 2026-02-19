@@ -1,0 +1,684 @@
+# ============================================================================
+# Medical Bill Validation Rules
+# ============================================================================
+# Codified from:
+# - SOP for Medical Bill Scrutiny (SECL)
+# - Cashless Hospital Bill Passing Checklist
+# - CGHS Rate Card rules
+# - Change in Entitlement under MAR (CIL OM 1287, 18.11.2024)
+# - Spectacles Reimbursement (CIL OM 1165-A, 06.03.2024)
+# - CPRMS-NE Clarifications (OPD limit, working spouse, deceased nominee)
+# - SOP for Medicine Distribution (SECL, 25.02.2025)
+# - Domain knowledge from bill scrutiny practices
+# ============================================================================
+
+version: "1.0"
+last_updated: "2025-02-18"
+
+# ============================================================================
+# SECTION 1: ELIGIBILITY RULES
+# ============================================================================
+eligibility:
+  
+  # Rule E001: Patient must be the employee or an eligible dependent
+  - rule_id: E001
+    name: Patient Eligibility Check
+    description: >
+      Verify that the patient named in the bill is the employee or a registered
+      eligible dependent (spouse, children, parents as per rules).
+    severity: ERROR
+    source: MAR Chapter II
+    checks:
+      - patient_name must match employee name OR a registered dependent name
+      - dependent must have is_eligible = true
+    notes: >
+      Married daughters and employed sons are NOT eligible. 
+      Father/Mother-in-law eligibility depends on specific rules.
+  
+  # Rule E002: Working spouse dependency
+  - rule_id: E002
+    name: Working Spouse Medical Benefit
+    description: >
+      If both spouses work in CIL/subsidiaries, the CPRMS-NE member shall
+      avail medical benefits as dependent of working spouse under MAR.
+      CPRMS-NE card is withheld until working spouse separates.
+    severity: ERROR
+    source: CIL OM dt. 02.02.2024 (Ref CIL/C5B/JBCCI/CPRMS-NE/6)
+    checks:
+      - if dependent.is_working_spouse == true
+      - then employee.medical_scheme should be MAR (not CPRMS-NE directly)
+      - CPRMS-NE card should be withheld
+  
+  # Rule E003: Hospital empanelment check
+  - rule_id: E003
+    name: Hospital Empanelment Verification
+    description: >
+      Verify that the treating hospital is empanelled with CIL for the 
+      type of treatment provided.
+    severity: ERROR
+    source: CIL Medical Policy
+    checks:
+      - hospital_name must match an entry in hospitals table
+      - empanelled_for should cover the treatment specialty
+      - empanelment_date should be before treatment date
+
+  # Rule E004: Referral validity
+  - rule_id: E004
+    name: Referral Validity Check
+    description: >
+      Admission date must be within 45 days of referral date.
+      Cross-referral required if treatment is not in the referred department.
+    severity: ERROR
+    source: Cashless Checklist Point 1
+    checks:
+      - admission_date <= referral_date + 45 days
+      - if treatment_department != referral_department, cross_referral required
+    notes: >
+      Patient name, entitled ward, referral department, and date of referral
+      to be verified with the bill.
+
+# ============================================================================
+# SECTION 2: RATE VALIDATION RULES
+# ============================================================================
+rate_validation:
+  
+  # Rule R001: CGHS rate cap
+  - rule_id: R001
+    name: CGHS Rate Cap
+    description: >
+      All charges must be at or below CGHS rates. If NABH accredited hospital,
+      NABH rates apply. Otherwise, Non-NABH rates apply.
+      Reimbursement = min(claimed_amount, applicable_cghs_rate).
+    severity: ERROR
+    source: SOP for Medical Bill Scrutiny
+    formula: >
+      if hospital.nabh_status == 'NABH':
+        max_amount = cghs_rate.nabh_rate
+      else:
+        max_amount = cghs_rate.non_nabh_rate
+      approved = min(claimed_amount, max_amount)
+    notes: >
+      Schedule of charges as per CGHS rates as applicable in various cities
+      or actual, whichever is lower.
+  
+  # Rule R002: No CGHS rate - fall back to AIIMS
+  - rule_id: R002
+    name: AIIMS Rate Fallback
+    description: >
+      If no CGHS rate exists for a procedure/test, AIIMS rates apply.
+      If no AIIMS rate exists, reimbursement at actuals.
+    severity: WARNING
+    source: SOP for Medical Bill Scrutiny, Checklist Point 14
+    checks:
+      - if cghs_rate is NULL for item
+      - check AIIMS rate
+      - if AIIMS rate is NULL, reimburse at actuals
+      - flag for manual review
+
+  # Rule R003: OPD consultation rate
+  - rule_id: R003
+    name: OPD Consultation Rate
+    description: >
+      OPD consultation fees to be reimbursed as per CGHS rates.
+      General consultation = Rs 350 (Non-NABH) / Rs 400 (NABH).
+    severity: ERROR
+    source: SOP, CGHS Rate Card
+    checks:
+      - consultation_amount <= cghs_consultation_rate
+  
+  # Rule R004: Investigation rates
+  - rule_id: R004
+    name: Investigation Rate Validation
+    description: >
+      All investigations to be reimbursed as per CGHS rates.
+    severity: ERROR
+    source: SOP for Medical Bill Scrutiny
+    checks:
+      - each investigation item_amount <= cghs_rate for that investigation
+
+# ============================================================================
+# SECTION 3: ROOM RENT / ACCOMMODATION RULES
+# ============================================================================
+room_rent:
+  
+  # Rule RR001: Room entitlement by grade (updated Nov 2024)
+  - rule_id: RR001
+    name: Room Entitlement by Grade
+    description: >
+      Room charges must match the entitled room category per employee grade.
+      Updated as per CIL OM dt. 18.11.2024.
+    severity: ERROR
+    source: CIL OM 1287 (18.11.2024), MAR Clause 5.2, CPRMSE Clause 3.2.1(b)
+    entitlements:
+      # MAR (Active Employees)
+      MAR:
+        BOARD: Suite / Highest category available
+        E9: Deluxe Room (AC)
+        E8: Deluxe Room (AC)
+        E7: Private Room (AC)
+        E6: Private Room (AC)
+        E5: Private Room (AC)
+        E4: Twin Sharing (AC)
+        E3: Twin Sharing (AC)
+        E2: Twin Sharing (AC)
+        E1: Twin Sharing (AC)
+        NON_EXE: Twin Sharing (AC)
+      # CPRMSE (Retired Executives)
+      CPRMSE:
+        BOARD: Suite / Highest category available
+        E9: Deluxe Room (AC)
+        E8: Deluxe Room (AC)
+        E7: Private Room (AC)
+        E6: Private Room (AC)
+        E5: Private Room (AC)
+        E4: Twin Sharing (AC)
+        E3: Twin Sharing (AC)
+        E2: Twin Sharing (AC)
+        E1: Twin Sharing (AC)
+    checks:
+      - room_type_on_bill must be <= entitled room category
+      - if higher room taken, reimburse only entitled room rate
+
+  # Rule RR002: Room rent CGHS rate
+  - rule_id: RR002
+    name: Room Rent CGHS Rate Cap
+    description: >
+      Room rent per day must not exceed CGHS approved rate for the
+      entitled room category.
+    severity: ERROR
+    source: CGHS Rate Card, SOP
+    checks:
+      - room_rent_per_day <= cghs_rate_for_entitled_room
+
+  # Rule RR003: Bed charge day counting
+  - rule_id: RR003
+    name: Bed Charge Day Counting Rule
+    description: >
+      When admission and discharge TIMES are not mentioned, bed charge days
+      calculated as (discharge_date - admission_date).
+      When times ARE mentioned, count based on 24-hour periods.
+    severity: WARNING
+    source: Cashless Checklist Points 2-3
+    examples:
+      - scenario: "Admitted 14th, discharged 16th (no times)"
+        days: 2  # NOT 3
+      - scenario: "Admitted 14th 2PM, discharged 16th 10AM (with times)"
+        days: 2  # Based on 24hr counting
+    checks:
+      - if no admission/discharge times, days = discharge_date - admission_date
+      - if times given, days = ceiling((discharge_time - admission_time) / 24h)
+
+# ============================================================================
+# SECTION 4: PACKAGE RULES
+# ============================================================================
+package_rules:
+  
+  # Rule P001: Package period inclusions
+  - rule_id: P001
+    name: Package Period - No Separate Charges
+    description: >
+      During the package period, ONLY surgery charges are payable.
+      NO separate reimbursement for: bed charges, consultation, admission charges,
+      OT charges, dressing charges, tests, medicines, consumables.
+      EXCEPTION: Implant cost is separately reimbursable.
+    severity: ERROR
+    source: Cashless Checklist Point 6, CGHS Book pg 88
+    excluded_items_in_package:
+      - ROOM_RENT
+      - CONSULTATION
+      - OT_CHARGES
+      - DRESSING
+      - INVESTIGATION
+      - MEDICINE
+      - CONSUMABLE
+      - NURSING
+    included_separately:
+      - IMPLANT  # Implant cost is reimbursable separately
+    checks:
+      - if claim has PACKAGE line item
+      - then no separate charges for excluded items during package dates
+      - only IMPLANT may be billed separately
+
+  # Rule P002: Package includes pre/post-operative consultations
+  - rule_id: P002
+    name: Package Pre/Post-Op Consultations
+    description: >
+      Package rate includes two pre-operative consultations and two
+      post-operative consultations. These cannot be billed separately.
+    severity: ERROR
+    source: Cashless Checklist Point 6
+    checks:
+      - if package, then max 2 pre-op + 2 post-op consultations are included
+      - additional pre/post-op consultations should not be charged
+
+  # Rule P003: Pre-admission investigations
+  - rule_id: P003
+    name: Pre-Admission Investigations in Package
+    description: >
+      All investigations for fitness for surgery should be done prior to
+      admission for any elective procedure and are part of the package.
+    severity: ERROR
+    source: Cashless Checklist Point 7
+    checks:
+      - if elective surgery with package
+      - then pre-admission fitness tests are part of package
+      - these should not be separately billed
+
+  # Rule P004: Late package start
+  - rule_id: P004
+    name: Delayed Package Start
+    description: >
+      If package starts 4-5 days after admission, the reason must be
+      mentioned in the discharge summary.
+    severity: WARNING
+    source: Cashless Checklist Point 13
+    checks:
+      - if package_start_date > admission_date + 3 days
+      - discharge_summary must mention reason
+
+  # Rule P005: Second surgery discount
+  - rule_id: P005
+    name: Second Surgery 50% Rule
+    description: >
+      Second surgery in the same admission/episode to be reimbursed at 50%.
+    severity: ERROR
+    source: Cashless Checklist Point 16
+    checks:
+      - if multiple PROCEDURE/PACKAGE items in same claim
+      - second and subsequent surgeries at 50% of CGHS rate
+
+# ============================================================================
+# SECTION 5: CONSULTATION RULES
+# ============================================================================
+consultation:
+  
+  # Rule C001: Consultation matching to treatment
+  - rule_id: C001
+    name: Consultation-Treatment Matching
+    description: >
+      Consultations of doctors to be paid according to their treatment
+      as mentioned in discharge summary or test reports.
+    severity: WARNING
+    source: Cashless Checklist Point 4
+    checks:
+      - each consultation should correspond to a doctor mentioned in discharge summary
+      - specialty should match treatment
+  
+  # Rule C002: Consultation frequency for bed charges
+  - rule_id: C002
+    name: Consultation Frequency with Bed Charges
+    description: >
+      When time of admission/discharge is mentioned, consultation of
+      first and last day will be counted as 1 instead of 2 per day.
+    severity: WARNING
+    source: Cashless Checklist Point 3
+    checks:
+      - first day and last day = 1 consultation each
+      - intermediate days = as per prescription (usually 1 per day)
+
+# ============================================================================
+# SECTION 6: PHARMACY / MEDICINE RULES
+# ============================================================================
+pharmacy:
+  
+  # Rule PH001: Reimbursable vs Non-Reimbursable medicines
+  - rule_id: PH001
+    name: Medicine Reimbursability Check
+    description: >
+      Pharmacy bills must be scrutinized for reimbursable vs non-reimbursable
+      drugs. Non-reimbursable items should be disallowed.
+    severity: ERROR
+    source: SOP for Medical Bill Scrutiny
+    non_reimbursable_categories:
+      - Cosmetic preparations
+      - Toiletries
+      - Food supplements (unless medically necessary)
+      - Over-the-counter items not in prescription
+    checks:
+      - each medicine item must be in reimbursable category
+      - non-reimbursable items to be flagged and disallowed
+
+  # Rule PH002: Medicine count verification
+  - rule_id: PH002
+    name: Medicine Count vs Prescription Match
+    description: >
+      Medicine count in the bill must match the prescription.
+    severity: WARNING
+    source: SOP for Medical Bill Scrutiny
+    checks:
+      - each medicine quantity on bill <= quantity on prescription
+      - flag mismatches for review
+
+  # Rule PH003: Medicine during package
+  - rule_id: PH003
+    name: Medicine in Package Period
+    description: >
+      Medicines during the package period are included in the package.
+      They should not be separately charged.
+    severity: ERROR
+    source: Cashless Checklist Point 6
+    checks:
+      - if package active, medicine charges should be 0
+
+# ============================================================================
+# SECTION 7: DOCUMENTATION RULES
+# ============================================================================
+documentation:
+  
+  # Rule D001: Test reports attachment
+  - rule_id: D001
+    name: Test Report Attachment
+    description: >
+      Test reports must be attached by hospitals as documentary proof.
+      Reports for small/minor tests can be ignored.
+    severity: WARNING
+    source: Cashless Checklist Point 9
+    checks:
+      - major investigation charges should have corresponding test reports
+      - flag if high-value tests lack reports
+
+  # Rule D002: Blood transfusion documentation
+  - rule_id: D002
+    name: Blood Transfusion Documentation
+    description: >
+      Blood transfusion charges can be reimbursed only if documentary evidence
+      is attached and mentioned in discharge summary.
+    severity: ERROR
+    source: Cashless Checklist Point 5
+    checks:
+      - if blood_transfusion charges exist
+      - discharge_summary must mention blood transfusion
+      - documentary evidence must be attached
+
+  # Rule D003: Implant bill requirements
+  - rule_id: D003
+    name: Implant Bill Requirements
+    description: >
+      Implant bills must mention patient name and hospital name.
+      Bill to be signed by hospital authorities with certification
+      of receipt date. Also to be signed by SECL doctors.
+    severity: ERROR
+    source: Cashless Checklist Point 8
+    checks:
+      - implant_bill must have patient_name
+      - implant_bill must have hospital_name
+      - hospital_authority_signature required
+      - secl_doctor_signature required
+
+  # Rule D004: Bill certification by SECL doctors
+  - rule_id: D004
+    name: Bill Certification by SECL Doctors
+    description: >
+      Each page of the bill must be signed by SECL doctors with certification:
+      'Cashless medical bills scrutinized technically and as per CGHS,
+      subject to financial scrutiny.'
+    severity: WARNING
+    source: Cashless Checklist Point 10
+    checks:
+      - each page should be signed
+      - front page certification text must be present
+
+  # Rule D005: Discharge summary requirement
+  - rule_id: D005
+    name: Discharge Summary Required
+    description: >
+      A complete discharge summary is required for all IPD claims.
+      It should contain diagnosis, treatment details, procedure performed,
+      medications administered, and doctor details.
+    severity: ERROR
+    source: General medical billing practice
+    checks:
+      - discharge_summary must be present for IPD claims
+      - should contain diagnosis, treatment details
+
+# ============================================================================
+# SECTION 8: HIGH-VALUE BILL RULES
+# ============================================================================
+high_value:
+  
+  # Rule HV001: Multi-doctor scrutiny thresholds
+  - rule_id: HV001
+    name: Multi-Doctor Scrutiny Requirement
+    description: >
+      Bills of Rs 5 lakhs or more require scrutiny by 2 medical officers.
+      Bills of Rs 10 lakhs or more require scrutiny by 3 doctors.
+    severity: ERROR
+    source: Cashless Checklist Point 15
+    thresholds:
+      - amount: 500000
+        min_scrutinizers: 2
+        label: "2 medical officers"
+      - amount: 1000000
+        min_scrutinizers: 3
+        label: "3 doctors"
+    checks:
+      - if claimed_amount >= 500000, scrutinized_by_2 must not be null
+      - if claimed_amount >= 1000000, scrutinized_by_3 must not be null
+
+  # Rule HV002: Extended stay CMS approval
+  - rule_id: HV002
+    name: Extended Stay CMS Approval
+    description: >
+      If patient stays more than 15 days in hospital (from 15th March 2016 onward),
+      approval of CMS must be attached.
+    severity: ERROR
+    source: Cashless Checklist Point 12
+    effective_from: "2016-03-15"
+    checks:
+      - if length_of_stay > 15
+      - cms_approval_attached must be true
+
+# ============================================================================
+# SECTION 9: OPD / DOMICILIARY RULES
+# ============================================================================
+opd_domiciliary:
+  
+  # Rule OPD001: CPRMS-NE OPD annual limit
+  - rule_id: OPD001
+    name: CPRMS-NE OPD/Domiciliary Annual Limit
+    description: >
+      OPD/Domiciliary treatment limit for CPRMS-NE is Rs 25,000 per annum
+      per CPRMS-NE card (not per person). Financial year basis.
+    severity: ERROR
+    source: CPRMS-NE Clause 3.1.2(b), CIL OM dt. 11.08.2023
+    limit: 25000
+    per: CARD  # per card, not per beneficiary
+    period: FINANCIAL_YEAR
+    checks:
+      - if medical_scheme == 'CPRMSNE' and treatment_type == 'OPD'
+      - sum of OPD claims in current FY for this card <= 25000
+  
+  # Rule OPD002: CPRMSE domiciliary treatment limit
+  - rule_id: OPD002
+    name: CPRMSE Domiciliary Treatment Limit
+    description: >
+      For CPRMSE members who opted for domiciliary treatment under clause 3.2.2,
+      outside medicine purchase reimbursement is adjusted from overall Rs 25 lakh limit.
+    severity: WARNING
+    source: SOP for Medicine Distribution
+    checks:
+      - if medical_scheme == 'CPRMSE'
+      - outside medicine claims deducted from 25L overall limit
+
+# ============================================================================
+# SECTION 10: SPECTACLES RULES
+# ============================================================================
+spectacles:
+  
+  # Rule SP001: Grade-wise spectacles ceiling
+  - rule_id: SP001
+    name: Spectacles Reimbursement Ceiling
+    description: >
+      Spectacles reimbursement with grade-wise ceiling for a 2-year block
+      starting 01.04.2024. Vision correction spectacles only.
+    severity: ERROR
+    source: CIL OM 1165-A (06.03.2024), MAR Clause 3.3(a)
+    block_start: "2024-04-01"
+    block_duration_years: 2
+    ceilings:
+      BOARD: 50000
+      E8: 45000
+      E9: 45000
+      E6: 35000
+      E7: 35000
+      E4: 30000
+      E5: 30000
+      E1: 20000
+      E2: 20000
+      E3: 20000
+      NON_EXE: 10000
+    checks:
+      - ceiling is combined for employee + dependents
+      - can claim in single bill or multiple bills within block
+      - date of purchase is reckoned for entitlement
+      - prescription by ophthalmologist required (not older than 6 months)
+      - original receipts required
+    exclusions:
+      - Anti-glare glasses
+      - Eye protection goggles
+      - Any non-vision-correction eyewear
+    exceptions:
+      - Dark goggles for visually challenged (as prescribed)
+    additional_rules:
+      - Newly recruited employees eligible only after confirmation/training closure
+      - No reimbursement after resignation submission (notice period)
+      - Unutilized amount lapses at end of 2-year block
+      - Eye consultation, testing, medicine charges remain separate (not part of ceiling)
+
+# ============================================================================
+# SECTION 11: SPECIAL HOSPITAL RULES
+# ============================================================================
+special_hospitals:
+  
+  # Rule SH001: Negotiated rate hospitals
+  - rule_id: SH001
+    name: Negotiated Rate Hospitals
+    description: >
+      Certain hospitals are reimbursed at negotiated rates instead of
+      CGHS rates (actual whichever is lower rule may not apply).
+    severity: INFO
+    source: SOP for Medical Bill Scrutiny (Page 3)
+    hospitals:
+      - Shankar Nethralaya, Chennai, Tamil Nadu
+      - CMC Vellore, Tamil Nadu
+      - Tata Medical Centre
+      - AIIMS
+      - All Government Hospitals (Central/State)
+    checks:
+      - if hospital is in special list, use negotiated rates
+      - government hospital bills at actuals
+
+# ============================================================================
+# SECTION 12: DECEASED/NOMINEE RULES
+# ============================================================================
+deceased_nominee:
+  
+  # Rule DN001: Reimbursement to undeclared nominee
+  - rule_id: DN001
+    name: Deceased Member Bill Reimbursement
+    description: >
+      Last IPD/OPD bill of expired beneficiary can be reimbursed to
+      undeclared/deceased/unavailable nominee with required documents.
+    severity: WARNING
+    source: CIL OM (CPRMS-NE) dt. 11.08.2023
+    required_documents:
+      - Affidavit before first-class judicial magistrate (listing legal heirs)
+      - Original CPRMS-NE (M) Card (surrendered)
+      - Death Certificate of expired member
+      - Indemnity Bond (indemnify CIL against future liability)
+      - Aadhaar and PAN of claimant
+      - Bank account details of claimant
+    checks:
+      - all 6 documents must be submitted
+      - if any document missing, claim not entertained
+
+# ============================================================================
+# SECTION 13: FRAUD DETECTION RULES
+# ============================================================================
+fraud_detection:
+  
+  # Rule F001: Duplicate billing
+  - rule_id: F001
+    name: Duplicate Bill Detection
+    description: >
+      Check for duplicate or near-duplicate bills (same hospital, same dates,
+      same amount, same patient).
+    severity: ERROR
+    source: Internal audit practice
+    checks:
+      - no two claims with same (hospital, admission_date, patient_name)
+      - flag similar amounts for same period
+  
+  # Rule F002: Abnormally high charges
+  - rule_id: F002
+    name: Abnormally High Charges
+    description: >
+      Flag charges significantly above CGHS rates or statistical norms.
+      Threshold: >150% of CGHS rate or >2 standard deviations above mean.
+    severity: WARNING
+    source: Internal audit practice
+    checks:
+      - individual item > 150% of CGHS rate
+      - total bill > 2x expected for diagnosis
+  
+  # Rule F003: Treatment-diagnosis mismatch
+  - rule_id: F003
+    name: Treatment-Diagnosis Mismatch
+    description: >
+      Procedures and tests should be clinically relevant to the diagnosis.
+      Flag unrelated procedures.
+    severity: WARNING
+    source: Medical billing best practices
+    checks:
+      - procedures should be consistent with diagnosis
+      - flag unrelated high-value procedures
+  
+  # Rule F004: Unusually frequent claims
+  - rule_id: F004
+    name: Unusual Claim Frequency
+    description: >
+      Flag employees or dependents with unusually frequent claims
+      that may indicate abuse.
+    severity: WARNING
+    source: Internal audit practice
+    checks:
+      - flag if more than 6 claims per year for same patient
+      - flag if total annual claims significantly above peer average
+
+# ============================================================================
+# SECTION 14: CRITICAL vs NON-CRITICAL DISEASE
+# ============================================================================
+disease_classification:
+  
+  # Rule DC001: CPRMSE/NE disease classification
+  - rule_id: DC001
+    name: Critical/Non-Critical Disease Classification
+    description: >
+      For CPRMSE and CPRMS-NE bills, critical and non-critical disease
+      must be specifically mentioned during scrutiny.
+    severity: WARNING
+    source: SOP for Medical Bill Scrutiny
+    checks:
+      - if medical_scheme in ('CPRMSE', 'CPRMSNE')
+      - is_critical flag must be set
+      - disease classification impacts entitlements
+
+# ============================================================================
+# SECTION 15: SAP ENTRY RULES
+# ============================================================================
+sap_integration:
+  
+  # Rule SAP001: Post-scrutiny SAP entry
+  - rule_id: SAP001
+    name: SAP Entry After Scrutiny
+    description: >
+      After detailed scrutiny, total amount disallowed and total amount passed
+      must be calculated from the claim amount. Noted in detail in rupees and
+      words, along with signature of scrutinizing authority.
+      Only then must bills be entered in SAP.
+    severity: INFO
+    source: SOP for Medical Bill Scrutiny
+    checks:
+      - disallowed_amount + approved_amount must equal claimed_amount
+      - calculation must be documented
+      - scrutinizing authority must sign

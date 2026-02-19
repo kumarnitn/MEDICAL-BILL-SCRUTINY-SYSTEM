@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: medbill-ai
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: ./start.sh
+    plan: free
+    branch: main
+    numInstances: 1
+    healthCheckPath: /api/status
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0

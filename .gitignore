@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Large / Sensitive Files
+Ollama-darwin.zip
+ollama_install/
+*.zip
+
+# Uploaded bills (user data — do NOT commit)
+data/uploads/
+data/ocr_output/
+
+# Processed bills JSON (generated at runtime)
+data/processed/bills/
+
+# Large source PDFs (too large for git; provide separately or use Git LFS)
+"CGHS Rate.pdf"
+"Hospital List 08.10.2025 (1).pdf"
+"Sample Bill (1).pdf"
+"Sample Bill (1)_repaired.pdf"
+*.pdf
+
+# SQLite database (generated at runtime from the PDFs)
+data/processed/medical_bills.db
+
+# Resolved/temporary analysis files
+*.resolved
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
