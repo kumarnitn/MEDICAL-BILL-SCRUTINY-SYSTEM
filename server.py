@@ -686,32 +686,23 @@ def _run_ocr(pdf_path: str, dpi: int, max_pages: int, job: dict) -> dict:
         
         # Inject a progress callback so each page updates the job dict
         original_ocr_image = engine.ocr_image
-        page_counter = {'current': 0, 'total': 0}
+        page_counter = {'current': 0, 'total': max_pages or 20}
         
         def ocr_with_progress(img):
             page_counter['current'] += 1
             p = page_counter['current']
-            t = page_counter['total'] or 1
+            t = max(page_counter['total'], 1)
             # Map OCR progress into the 15-50% range of the overall pipeline
-            pct = 15 + int(35 * p / t)
+            pct = 15 + int(35 * min(p, t) / t)
             job["progress"] = min(pct, 49)
             _update_step(job, "ocr", "active", f"OCR page {p}/{t}...")
             return original_ocr_image(img)
         
         engine.ocr_image = ocr_with_progress
         
-        # Get page count for progress denominator
-        try:
-            from pdf2image.pdf2image import pdfinfo_from_path
-            info = pdfinfo_from_path(pdf_path)
-            total = info.get('Pages', 0)
-        except Exception:
-            total = max_pages or 20
-        
-        actual_pages = min(total, max_pages) if max_pages > 0 else total
-        page_counter['total'] = max(actual_pages, 1)
-        
         result = engine.extract_from_pdf(pdf_path)
+        # Update total with actual page count from the result
+        page_counter['total'] = result.get('pages_processed', page_counter['total'])
         return result
     except Exception as e:
         print(f"[OCR ERROR] {e}")
