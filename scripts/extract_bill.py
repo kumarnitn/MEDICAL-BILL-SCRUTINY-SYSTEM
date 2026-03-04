@@ -217,17 +217,57 @@ class OCREngine:
         img_array = np.array(processed)
         
         # Run OCR
-        result = self.ocr.ocr(img_array)
+        res = list(self.ocr.predict(img_array))
         
         text_lines = []
         confidences = []
+        boxes = []
         
-        # PaddleOCR returns [[[box], [text, confidence]], ...]
-        if result and result[0]:
-            for line in result[0]:
-                if line and len(line) == 2 and len(line[1]) == 2:
-                    text_lines.append(line[1][0])
-                    confidences.append(line[1][1])
+        if res and len(res) > 0:
+            result_dict = res[0]
+            if 'rec_texts' in result_dict and 'rec_polys' in result_dict:
+                texts = result_dict['rec_texts']
+                scores = result_dict['rec_scores']
+                polys = result_dict['rec_polys']
+                
+                for i in range(len(texts)):
+                    txt = texts[i]
+                    conf = scores[i]
+                    coords = polys[i] # shape (4, 2)
+                    
+                    # Compute center Y and left X for document layout reconstruction
+                    y_c = (coords[0][1] + coords[2][1]) / 2.0
+                    x_l = min(coords[0][0], coords[3][0])
+                    boxes.append((y_c, x_l, txt, conf))
+        
+        # Group text blocks into lines based on Y-coordinate tolerance
+        boxes.sort(key=lambda b: b[0])  # Sort by Y first
+        
+        current_y = None
+        current_line = []
+        Y_TOLERANCE = 15  # pixels
+        
+        for b in boxes:
+            y_c, x_l, txt, conf = b
+            confidences.append(conf)
+            
+            if current_y is None:
+                current_y = y_c
+                current_line.append(b)
+            elif abs(y_c - current_y) <= Y_TOLERANCE:
+                current_line.append(b)
+                # update rolling average for current_y
+                current_y = (current_y * (len(current_line)-1) + y_c) / len(current_line)
+            else:
+                # Sort line by X and join
+                current_line.sort(key=lambda v: v[1])
+                text_lines.append("   ".join(v[2] for v in current_line))
+                current_line = [b]
+                current_y = y_c
+                
+        if current_line:
+            current_line.sort(key=lambda v: v[1])
+            text_lines.append("   ".join(v[2] for v in current_line))
         
         text = '\n'.join(text_lines)
         # Convert 0-1 confidence to 0-100%
@@ -346,9 +386,9 @@ class RuleBasedExtractor:
     
     # Amount patterns
     AMOUNT_PATTERNS = [
-        r'(?:Rs\.?|INR|₹)\s*([\d,]+\.?\d*)',
-        r'([\d,]+\.?\d*)\s*(?:Rs\.?|INR|₹)',
-        r'(?:Total|Amount|Net|Grand|Balance|Due|Payable)\s*[:\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+\.?\d*)',
+        r'(?:Rs\.?|INR|₹)[\s:|]*([\d,]+\.?\d*)',
+        r'([\d,]+\.?\d*)[\s:|]*(?:Rs\.?|INR|₹)',
+        r'(?:Total|Amount|Net|Grand|Balance|Due|Payable)[\s:|]*(?:Rs\.?|INR|₹)?[\s:|]*([\d,]+\.?\d*)',
     ]
     
     def extract(self, text: str) -> ExtractedBill:
@@ -380,8 +420,9 @@ class RuleBasedExtractor:
         # Bill metadata
         bill.bill_number = self._extract_field(text, 
             [r'Invoice\s*#\s*(\S+)',
-             r'Bill\s*(?:No|Number|#)\s*[.:]*\s*(\S+)',
-             r'Invoice\s*(?:No|Number|#)\s*[.:]*\s*(\S+)'])
+             r'Bill\s*(?:No|Number|#)[\s.:\-]*(\S+)',
+             r'Invoice\s*(?:No|Number|#)[\s.:\-]*(\S+)',
+             r'(INV-[A-Z0-9\-]+)'])
         bill.bill_date = self._extract_field(text,
             [r'Bill\s*Date\s*[.:]*\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})',
              r'Invoice\s*Date\s*[.:]*\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})',
@@ -389,7 +430,7 @@ class RuleBasedExtractor:
         
         # CIL/SECL specific: Extract Employee ID, Grade, CPRMSE card no
         bill.patient.employee_id = self._extract_field(text, [
-            r'(?:Employee|Emp\s*No|EIS/NEIS)[\s.:]*(?:of\s+Employee)?[\s.:]*(\d{8,})',
+            r'(?:Employee|Emp\s*No|EIS/NEIS)[\s.:]*(?:of\s+Employee)?[\s.:\-]*(\d{8,})',
             r'(?:Shri|Mr\.?)\s+[A-Za-z\s]+\((\d{8,})\)',
         ])
         
@@ -402,7 +443,7 @@ class RuleBasedExtractor:
         
         # Extract total bill amount from cover letter (often the most reliable source)
         cover_total = self._extract_field(text, [
-            r'[Tt]otal\s*\|\s*([\d,]+\.\d{2})',
+            r'[Tt]otal[\s:|]*([\d,]+\.\d{2})',
             r'In\s*Words?\s*[.:]*\s*([A-Za-z\s]+(?:Lacs?|Lakhs?|Thousand)[A-Za-z\s]+Only)',
         ])
         # Try for the larger total from breakdown table
@@ -420,8 +461,9 @@ class RuleBasedExtractor:
         
         # Better total from "PO Total" or similar summary lines
         po_total = self._extract_field(text, [
-            r'(?:PO|Grand)\s*Total\s*\|\s*([\d,]+\.?\d*)',
-            r'(?:PO|Grand)\s*Total\s*[.:]*\s*(?:Rs\.?)?\s*([\d,]+\.?\d*)',
+            r'(?:PO|Grand)\s*Total[\s:|]*([\d,]+\.?\d*)',
+            r'(?:PO|Grand)\s*Total[\s.:|]*(?:Rs\.?)?[\s|]*([\d,]+\.?\d*)',
+            r'[Tt]otal[\s:|]*([\d,]+\.\d{2})',
         ])
         if po_total:
             try:
@@ -457,9 +499,9 @@ class RuleBasedExtractor:
 
         p.name = self._extract_field(text, [
             # 1. Explicit 'Patient Name' label (highest priority)
-            r'Patient\s*Name\s*[-:]*\s*(?:Mr\.?|Mrs?\.?|Ms\.?|Shri\.?|Smt\.?)?\s*([A-Z][A-Za-z]+(?: [A-Za-z]+){1,4})' + _NAME_END,
+            r'Patient\s*Name\s*[-:\s]*(?:Mr\.?|Mrs?\.?|Ms\.?|Shri\.?|Smt\.?)?\s*([A-Z][A-Za-z]+(?: [A-Za-z]+){1,4})' + _NAME_END,
             # 2. Name of the Patient label
-            r'Name\s+of\s+(?:Patient|the\s+Patient)\s*[-:]*\s*(?:Mr\.?|Mrs?\.?|Ms\.?)?\s*([A-Z][A-Za-z]+(?: [A-Za-z]+){1,4})' + _NAME_END,
+            r'Name\s+of\s+(?:Patient|the\s+Patient)\s*[-:\s]*(?:Mr\.?|Mrs?\.?|Ms\.?)?\s*([A-Z][A-Za-z]+(?: [A-Za-z]+){1,4})' + _NAME_END,
             # 3. SECL cover-letter: "Medical Bill Payment of Mr. Anil Kumar Pandey"
             r'Bill\s+Payment\s+of\s+(?:Mr\.?|Mrs?\.?|Ms\.?|Shri\.?|Smt\.?)\s*([A-Z][A-Za-z]+(?: [A-Za-z]+){1,3})(?=\s*[,\n.\t]|$)',
             # 4. Generic "Payment of Mr. ..."
@@ -468,6 +510,8 @@ class RuleBasedExtractor:
             r'Shri\s+([A-Z][A-Za-z]+(?: [A-Za-z]+){1,3})\s*\(\d{7,}\)',
             # 6. Mr./Mrs. prefix — only if followed by properly-cased words then line end / non-word
             r'(?:Mr\.?|Mrs?\.?|Ms\.?)\s+([A-Z][a-z]{2,}(?: [A-Z][a-z]{2,}){1,3})(?=[^\w]|\n|$)',
+            # 7. Tabular layout catch when Name label is on the row above the actual value
+            r'(?:Patient\s+Name[^\n]*)[\r\n]+(?:\d+:\s*)?([A-Z]{3,}(?:\s+[A-Z]{2,})*)',
         ])
 
         p.age = self._extract_field(text, [
@@ -481,7 +525,7 @@ class RuleBasedExtractor:
 
         p.uhid = self._extract_field(text, [
             # Common hospital MRN formats: BMC0049654, MRN-12345, UHID: 12345
-            r'(?:UHID|MRN|MR\s*No|Patient\s*ID|Reg\s*No)\s*[-:]*\s*((?:[A-Z]{2,5})?\d{4,})',
+            r'(?:UHID|MRN(?:No)?|MR\s*No|Patient\s*ID|Reg\s*No)[\s.:\-]*((?:[A-Z]{2,5})?-?\d{4,})',
             r'MRN-\s*(\w+)',
         ])
 

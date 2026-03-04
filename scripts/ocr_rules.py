@@ -93,14 +93,47 @@ def ocr_scanned_pdf(pdf_path, output_path):
         
         # Initialize OCR Engine locally for the script
         ocr = PaddleOCR(use_textline_orientation=False, lang='en', ocr_version='PP-OCRv4')
-        result = ocr.ocr(img_array)
+        res = list(ocr.predict(img_array))
         
         text_lines = []
-        if result and result[0]:
-            for line in result[0]:
-                if line and len(line) == 2 and len(line[1]) == 2:
-                    text_lines.append(line[1][0])
+        boxes = []
         
+        if res and len(res) > 0:
+            res_dict = res[0]
+            if 'rec_texts' in res_dict and 'rec_polys' in res_dict:
+                texts = res_dict['rec_texts']
+                polys = res_dict['rec_polys']
+                for i in range(len(texts)):
+                    coords = polys[i]
+                    txt = texts[i]
+                    y_c = (coords[0][1] + coords[2][1]) / 2.0
+                    x_l = min(coords[0][0], coords[3][0])
+                    boxes.append((y_c, x_l, txt))
+        
+        # Sort lines by Y and then X to preserve visual layout
+        boxes.sort(key=lambda b: b[0])
+        current_y = None
+        current_line = []
+        Y_TOL = 15
+        
+        for b in boxes:
+            y_c, x_l, txt = b
+            if current_y is None:
+                current_y = y_c
+                current_line.append(b)
+            elif abs(y_c - current_y) <= Y_TOL:
+                current_line.append(b)
+                current_y = (current_y * (len(current_line)-1) + y_c) / len(current_line)
+            else:
+                current_line.sort(key=lambda v: v[1])
+                text_lines.append("   ".join(v[2] for v in current_line))
+                current_line = [b]
+                current_y = y_c
+                
+        if current_line:
+            current_line.sort(key=lambda v: v[1])
+            text_lines.append("   ".join(v[2] for v in current_line))
+            
         text = '\n'.join(text_lines)
         
         char_count = len(text.strip())
