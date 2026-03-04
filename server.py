@@ -13,7 +13,7 @@ FastAPI server that:
 
 Start with:
     python3 server.py
-    # or:  uvicorn server:app --host 0.0.0.0 --port 8080 --reload
+    # or:  uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 """
 
 import os
@@ -77,8 +77,8 @@ def _load_existing_bills():
                     with open(os.path.join(BILLS_JSON_DIR, fname), 'r') as f:
                         bill_data = json.load(f)
                         processed_bills.append(bill_data)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[WARN] Could not load {fname}: {e}")
 
 _load_existing_bills()
 
@@ -250,6 +250,18 @@ async def stream_job_progress(job_id: str):
                 yield f"data: {data}\n\n"
                 last_step_count = current_step_count
                 last_status = current_status
+                last_progress = job["progress"]
+            
+            # Also send an update if progress changed (e.g. during long OCR)
+            elif job.get("progress", 0) != locals().get('last_progress', -1):
+                data = json.dumps({
+                    "status": job["status"],
+                    "progress": job["progress"],
+                    "steps": job["steps"],
+                    "error": job["error"],
+                })
+                yield f"data: {data}\n\n"
+                last_progress = job["progress"]
             
             if job["status"] in ("completed", "failed"):
                 # Send final result
@@ -661,11 +673,44 @@ def _update_step(job: dict, step_id: str, status: str, message: str):
 
 
 def _run_ocr(pdf_path: str, dpi: int, max_pages: int, job: dict) -> dict:
-    """Run OCR extraction (blocking, runs in thread pool)."""
+    """Run OCR extraction (blocking, runs in thread pool).
+    
+    Updates job progress on each page so the SSE stream relays per-page
+    progress to the frontend — prevents the UI from appearing frozen
+    during the longest pipeline stage.
+    """
     try:
         from extract_bill import OCREngine
         
         engine = OCREngine(dpi=dpi, max_pages=max_pages)
+        
+        # Inject a progress callback so each page updates the job dict
+        original_ocr_image = engine.ocr_image
+        page_counter = {'current': 0, 'total': 0}
+        
+        def ocr_with_progress(img):
+            page_counter['current'] += 1
+            p = page_counter['current']
+            t = page_counter['total'] or 1
+            # Map OCR progress into the 15-50% range of the overall pipeline
+            pct = 15 + int(35 * p / t)
+            job["progress"] = min(pct, 49)
+            _update_step(job, "ocr", "active", f"OCR page {p}/{t}...")
+            return original_ocr_image(img)
+        
+        engine.ocr_image = ocr_with_progress
+        
+        # Get page count for progress denominator
+        try:
+            from pdf2image.pdf2image import pdfinfo_from_path
+            info = pdfinfo_from_path(pdf_path)
+            total = info.get('Pages', 0)
+        except Exception:
+            total = max_pages or 20
+        
+        actual_pages = min(total, max_pages) if max_pages > 0 else total
+        page_counter['total'] = max(actual_pages, 1)
+        
         result = engine.extract_from_pdf(pdf_path)
         return result
     except Exception as e:

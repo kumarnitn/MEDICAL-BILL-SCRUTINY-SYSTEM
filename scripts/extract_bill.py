@@ -180,19 +180,25 @@ class OCREngine:
             raise
     
     def preprocess_image(self, img: Image.Image) -> Image.Image:
-        """Enhance image for better OCR."""
+        """Enhance image for better OCR.
+        
+        PERF: At 200 DPI an A4 page is 1654×2339px. The old code upscaled
+        anything below 2000px using slow LANCZOS — this hit EVERY page.
+        Now only upscales truly small/cropped images (<1200px) using
+        faster BILINEAR resampling, and skips SHARPEN for larger images.
+        """
         # Grayscale
         img = img.convert('L')
         # Enhance contrast
         enhancer = ImageEnhance.Contrast(img)
         img = enhancer.enhance(1.5)
-        # Sharpen
-        img = img.filter(ImageFilter.SHARPEN)
-        # Upscale small images
+        # Upscale only truly small images (e.g. cropped scans, mobile photos)
         w, h = img.size
-        if w < 2000:
-            scale = 2000 / w
-            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        if w < 1200:
+            scale = 1200 / w
+            img = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
+            # Only sharpen upscaled images — adds ~100ms per page on large images
+            img = img.filter(ImageFilter.SHARPEN)
         return img
     
     def ocr_image(self, img: Image.Image) -> Dict:
@@ -245,17 +251,19 @@ class OCREngine:
         """
         print(f"    Converting PDF to images (DPI={self.dpi})...")
         
-        # First, get total page count without rendering all pages
-        # Try a quick single-page probe to test the PDF, then iterate
-        probe = self.pdf_to_images(pdf_path, first_page=1, last_page=1)
-        if not probe:
-            raise RuntimeError("Could not read any pages from PDF")
+        # Get page count without rendering any images — fast metadata read
+        try:
+            from pdf2image.pdf2image import pdfinfo_from_path
+            info = pdfinfo_from_path(pdf_path)
+            total_pages = info.get('Pages', 0)
+        except Exception:
+            # Fallback: render page 1 only and detect total via convert_from_path
+            all_probe = self.pdf_to_images(pdf_path)
+            total_pages = len(all_probe)
+            del all_probe
         
-        # Get total page count by trying convert with last_page set very high
-        # pdf2image returns only the pages that exist
-        all_probe = self.pdf_to_images(pdf_path)
-        total_pages = len(all_probe)
-        del all_probe  # free memory immediately
+        if total_pages == 0:
+            raise RuntimeError("Could not read any pages from PDF")
         print(f"    Found {total_pages} pages")
         
         pages_to_process = total_pages
@@ -287,7 +295,7 @@ class OCREngine:
         return {
             'text': full_text,
             'pages': total_pages,
-            'pages_processed': len(images),
+            'pages_processed': processed_count,
             'avg_confidence': avg_confidence,
         }
 
@@ -1265,7 +1273,7 @@ Examples:
     parser.add_argument('pdf_path', help='Path to the medical bill PDF')
     parser.add_argument('--no-llm', action='store_true', help='Skip LLM, use rule-based extraction only')
     parser.add_argument('--model', default=DEFAULT_MODEL, help=f'Ollama model name (default: {DEFAULT_MODEL})')
-    parser.add_argument('--dpi', type=int, default=300, help='OCR DPI (default: 300)')
+    parser.add_argument('--dpi', type=int, default=200, help='OCR DPI (default: 200)')
     parser.add_argument('--max-pages', type=int, default=20, help='Max pages to OCR (default: 20, 0=all)')
     
     args = parser.parse_args()
