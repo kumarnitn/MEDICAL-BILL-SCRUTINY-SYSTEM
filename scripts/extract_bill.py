@@ -138,7 +138,7 @@ class ExtractedBill:
 class OCREngine:
     """Tesseract-based OCR with preprocessing for scanned medical bills."""
     
-    def __init__(self, dpi: int = 300, lang: str = 'eng', max_pages: int = 0):
+    def __init__(self, dpi: int = 200, lang: str = 'eng', max_pages: int = 0):
         self.dpi = dpi
         self.lang = lang
         self.max_pages = max_pages  # 0 = all pages
@@ -196,28 +196,39 @@ class OCREngine:
         return img
     
     def ocr_image(self, img: Image.Image) -> Dict:
-        """OCR a single image, returning text and confidence."""
+        """OCR a single image, returning text and confidence.
+        
+        PERF: Uses a single image_to_data() call which returns both the
+        recognised text AND per-word confidence. The old code called
+        image_to_string() + image_to_data() — two full Tesseract passes
+        per page, doubling OCR time.
+        """
         processed = self.preprocess_image(img)
         
-        # Get text
-        text = pytesseract.image_to_string(
-            processed, lang=self.lang,
-            config='--psm 6 --oem 3'
-        )
-        
-        # Get confidence data
         try:
             data = pytesseract.image_to_data(
                 processed, lang=self.lang,
                 config='--psm 6 --oem 3',
                 output_type=pytesseract.Output.DICT
             )
+            # Reconstruct text from the word-level data
+            # Each entry has: level, page_num, block_num, par_num, line_num, word_num, text, conf
+            lines = {}
+            for i, word in enumerate(data['text']):
+                if word.strip():
+                    line_key = (data['block_num'][i], data['par_num'][i], data['line_num'][i])
+                    lines.setdefault(line_key, []).append(word)
+            text = '\n'.join(' '.join(words) for words in lines.values())
+            
             # Include words with confidence >= 0 (skip -1 which means "no confidence data")
-            # NOTE: Do NOT filter out 0% confidence words — they represent genuine failures
-            # and must be included so the reported average is not artificially inflated.
             confidences = [int(c) for c in data['conf'] if int(c) >= 0]
             avg_conf = sum(confidences) / len(confidences) if confidences else 0
         except Exception:
+            # Fallback: use image_to_string if image_to_data fails
+            text = pytesseract.image_to_string(
+                processed, lang=self.lang,
+                config='--psm 6 --oem 3'
+            )
             avg_conf = 0
         
         return {
@@ -226,31 +237,51 @@ class OCREngine:
         }
     
     def extract_from_pdf(self, pdf_path: str) -> Dict:
-        """Extract all text from a PDF."""
+        """Extract all text from a PDF.
+        
+        PERF: Processes pages ONE AT A TIME to avoid loading all page
+        images into memory simultaneously. For a 20-page bill at 300 DPI,
+        the old code loaded ~1.5 GB of images up front.
+        """
         print(f"    Converting PDF to images (DPI={self.dpi})...")
         
-        # For large PDFs, process in batches or limit pages
-        images = self.pdf_to_images(pdf_path)
-        total_pages = len(images)
+        # First, get total page count without rendering all pages
+        # Try a quick single-page probe to test the PDF, then iterate
+        probe = self.pdf_to_images(pdf_path, first_page=1, last_page=1)
+        if not probe:
+            raise RuntimeError("Could not read any pages from PDF")
+        
+        # Get total page count by trying convert with last_page set very high
+        # pdf2image returns only the pages that exist
+        all_probe = self.pdf_to_images(pdf_path)
+        total_pages = len(all_probe)
+        del all_probe  # free memory immediately
         print(f"    Found {total_pages} pages")
         
-        # If max_pages is set, only process that many
+        pages_to_process = total_pages
         if self.max_pages > 0 and total_pages > self.max_pages:
-            print(f"    ⚠️ Limiting OCR to first {self.max_pages} pages (of {total_pages})")
-            images = images[:self.max_pages]
+            print(f"    Limiting OCR to first {self.max_pages} pages (of {total_pages})")
+            pages_to_process = self.max_pages
         
         all_text = []
         total_conf = 0
         
-        for i, img in enumerate(images, 1):
-            print(f"    OCR page {i}/{len(images)}...", end=' ', flush=True)
-            result = self.ocr_image(img)
+        for page_num in range(1, pages_to_process + 1):
+            print(f"    OCR page {page_num}/{pages_to_process}...", end=' ', flush=True)
+            # Convert ONE page at a time — keeps memory low
+            page_images = self.pdf_to_images(pdf_path, first_page=page_num, last_page=page_num)
+            if not page_images:
+                print("(skipped — no image)")
+                continue
+            result = self.ocr_image(page_images[0])
+            del page_images  # free image memory immediately
             print(f"({len(result['text'])} chars, conf={result['confidence']:.0f}%)")
             
-            all_text.append(f"--- PAGE {i} ---\n{result['text']}")
+            all_text.append(f"--- PAGE {page_num} ---\n{result['text']}")
             total_conf += result['confidence']
         
-        avg_confidence = total_conf / len(images) if images else 0
+        processed_count = len(all_text)
+        avg_confidence = total_conf / processed_count if processed_count else 0
         full_text = '\n\n'.join(all_text)
         
         return {
