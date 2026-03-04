@@ -138,6 +138,9 @@ const state = {
 
     /** Whether the edit panel is currently visible */
     editPanelOpen: false,
+
+    /** Guard flag to prevent concurrent renderDashboard calls */
+    _rendering: false,
 };
 
 /* ============================================================
@@ -244,6 +247,8 @@ async function loadBills() {
 }
 
 async function selectBill(billId) {
+    // Guard: ignore if a render is already in progress
+    if (state._rendering) return;
     const fullBill = await api.get(`/api/bills/${billId}`);
     if (fullBill) {
         state.selectedBill = fullBill;
@@ -277,18 +282,24 @@ function switchTab(tab) {
    ============================================================ */
 
 function renderDashboard() {
-    if (!state.selectedBill) {
-        renderEmptyState();
-        return;
+    if (state._rendering) return;
+    state._rendering = true;
+    try {
+        if (!state.selectedBill) {
+            renderEmptyState();
+            return;
+        }
+        renderStats();
+        renderBillSelector();
+        renderBillDetail();
+        renderConfidencePanel();
+        renderLineItems();
+        renderValidation();
+        renderMetadata();
+        renderEditPanel();
+    } finally {
+        state._rendering = false;
     }
-    renderStats();
-    renderBillSelector();
-    renderBillDetail();
-    renderConfidencePanel();
-    renderLineItems();
-    renderValidation();
-    renderMetadata();
-    renderEditPanel();
 }
 
 /** Shown when no bills have been processed yet */
@@ -879,7 +890,11 @@ const upload = {
             e.preventDefault();
             zone.classList.remove('drag-over');
             const file = e.dataTransfer.files[0];
-            if (file?.type === 'application/pdf') {
+            // Accept files that are PDF by MIME type OR by extension
+            // (some OS/browser combos report an empty MIME type for PDFs)
+            const isPdf = file?.type === 'application/pdf' ||
+                (file?.name?.toLowerCase().endsWith('.pdf'));
+            if (isPdf) {
                 this.start(file);
             } else {
                 ui.toast('Please upload a PDF file', 'warn');

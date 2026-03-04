@@ -28,7 +28,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Body
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -346,7 +346,7 @@ async def search_hospitals(q: str = Query(..., min_length=2)):
 
 
 @app.post("/api/bills/{bill_id}/save")
-async def save_bill(bill_id: str, payload: dict):
+async def save_bill(bill_id: str, payload: dict = Body(...)):
     """
     Save user-reviewed and potentially edited bill data to disk.
     Accepts the full bill JSON (including user edits from the frontend review panel).
@@ -364,23 +364,26 @@ async def save_bill(bill_id: str, payload: dict):
 
     # Find the existing bill (if any) and update it
     found = False
-    for i, bill in enumerate(processed_bills):
+    save_index = -1
+    for idx, bill in enumerate(processed_bills):
         if bill.get("id") == bill_id:
             # Merge edits into stored bill
-            processed_bills[i] = {**bill, **payload, "id": bill_id}
+            processed_bills[idx] = {**bill, **payload, "id": bill_id}
             found = True
+            save_index = idx
             break
 
     if not found:
         # Bill not in memory — store it fresh
         payload["id"] = bill_id
         processed_bills.append(payload)
+        save_index = len(processed_bills) - 1
 
     # Persist to disk
     bill_json_path = os.path.join(BILLS_JSON_DIR, f"{bill_id}.json")
     try:
         with open(bill_json_path, 'w', encoding='utf-8') as f:
-            json.dump(processed_bills[i if found else -1], f, indent=2, default=str)
+            json.dump(processed_bills[save_index], f, indent=2, default=str)
     except Exception as e:
         print(f"[SAVE ERROR] Could not persist bill {bill_id}: {e}")
 
@@ -423,7 +426,10 @@ async def _check_ollama() -> dict:
     """Check if Ollama is running and what models are available."""
     try:
         import requests
-        resp = requests.get("http://localhost:11434/api/tags", timeout=2)
+        loop = asyncio.get_running_loop()
+        resp = await loop.run_in_executor(
+            None, lambda: requests.get("http://localhost:11434/api/tags", timeout=2)
+        )
         if resp.status_code == 200:
             models = resp.json().get('models', [])
             model_names = [m['name'] for m in models]
@@ -464,7 +470,7 @@ async def _process_bill_async(job_id: str):
         await asyncio.sleep(0.1)
         
         # Run OCR in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ocr_result = await loop.run_in_executor(
             None, _run_ocr, pdf_path, job["dpi"], job["max_pages"], job
         )
@@ -562,13 +568,13 @@ async def _process_bill_async(job_id: str):
         with open(bill_json_path, 'w', encoding='utf-8') as f:
             json.dump(bill_dict, f, indent=2, default=str)
 
-        # Add to in-memory list
-        processed_bills.append(bill_dict)
+        # Add to in-memory list — store a copy to prevent shared-reference mutation
+        processed_bills.append(dict(bill_dict))
 
-        # Mark job complete
+        # Mark job complete — store a separate copy for the job result
         job["status"] = "completed"
         job["progress"] = 100
-        job["result"] = bill_dict
+        job["result"] = dict(bill_dict)
         
     except Exception as e:
         job["status"] = "failed"
@@ -703,17 +709,33 @@ def _run_validation(bill) -> List[dict]:
         engine = ValidationEngine()
         
         # Build claim dict from extracted bill
+        # Normalise admission/discharge dates to YYYY-MM-DD for the validation engine,
+        # which internally calls datetime.strptime(..., '%Y-%m-%d').
+        def _normalise_date(raw: str) -> str:
+            """Convert DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY to YYYY-MM-DD."""
+            if not raw:
+                return ""
+            for fmt in ('%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y',
+                        '%d/%m/%y', '%d-%m-%y', '%d.%m.%y'):
+                try:
+                    return datetime.strptime(raw.strip(), fmt).strftime('%Y-%m-%d')
+                except ValueError:
+                    continue
+            return raw  # already in correct format or unparseable — pass through
+
         claim = {
             "employee_id": bill.patient.employee_id or "",
             "patient_name": bill.patient.name or "",
             "patient_relationship": bill.patient.relationship or "SELF",
             "hospital_name": bill.hospital.name or "",
-            "admission_date": bill.admission.admission_date or "",
-            "discharge_date": bill.admission.discharge_date or "",
+            "admission_date": _normalise_date(bill.admission.admission_date),
+            "discharge_date": _normalise_date(bill.admission.discharge_date),
             "length_of_stay": bill.admission.days_stayed or 0,
             "diagnosis": bill.admission.diagnosis or "",
             "ward_type": bill.admission.ward_type or "",
-            "total_claimed": bill.total_amount or 0,
+            # Use 'claimed_amount' — the key the validation engine reads for HV rules
+            "claimed_amount": bill.total_amount or 0,
+            "total_claimed": bill.total_amount or 0,  # kept for backward compat
             "net_amount": bill.net_amount or 0,
             "bill_number": bill.bill_number or "",
             "bill_date": bill.bill_date or "",
@@ -797,11 +819,11 @@ if __name__ == "__main__":
     print("=" * 60)
     print("  MedBill AI — Backend Server")
     print("=" * 60)
-    print(f"\n  Dashboard:  http://localhost:8080")
-    print(f"  API Docs:   http://localhost:8080/docs")
+    print(f"\n  Dashboard:  http://localhost:8000")
+    print(f"  API Docs:   http://localhost:8000/docs")
     print(f"  Database:   {DB_PATH}")
     print(f"  Uploads:    {UPLOADS_DIR}")
     print(f"  Bills:      {len(processed_bills)} previously processed")
     print("=" * 60 + "\n")
     
-    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

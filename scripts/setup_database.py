@@ -480,10 +480,26 @@ if __name__ == '__main__':
         setup_employee_schema(conn)
         setup_claims_schema(conn)
         setup_validation_schema(conn)
+        conn.commit()   # Commit schema first — safe to keep even if later steps fail
+    except Exception as e:
+        conn.rollback()
+        print(f"\n  ❌ Schema setup failed: {e}")
+        conn.close()
+        raise
+
+    try:
         create_indexes(conn)
+        conn.commit()   # Commit indexes separately
+    except Exception as e:
+        print(f"\n  ⚠️  Index creation failed (non-fatal): {e}")
+
+    try:
         populate_rule_documents(conn)
-        conn.commit()
-        
+        conn.commit()   # Commit rule documents separately
+    except Exception as e:
+        print(f"\n  ⚠️  Rule documents population failed (non-fatal): {e}")
+
+    try:
         print_schema_summary(conn)
     finally:
         conn.close()
@@ -491,3 +507,4 @@ if __name__ == '__main__':
     print("\n" + "=" * 70)
     print("  Done!")
     print("=" * 70)
+

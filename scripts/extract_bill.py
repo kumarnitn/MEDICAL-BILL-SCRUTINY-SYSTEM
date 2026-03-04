@@ -212,7 +212,10 @@ class OCREngine:
                 config='--psm 6 --oem 3',
                 output_type=pytesseract.Output.DICT
             )
-            confidences = [int(c) for c in data['conf'] if int(c) > 0]
+            # Include words with confidence >= 0 (skip -1 which means "no confidence data")
+            # NOTE: Do NOT filter out 0% confidence words — they represent genuine failures
+            # and must be included so the reported average is not artificially inflated.
+            confidences = [int(c) for c in data['conf'] if int(c) >= 0]
             avg_conf = sum(confidences) / len(confidences) if confidences else 0
         except Exception:
             avg_conf = 0
@@ -461,11 +464,15 @@ class RuleBasedExtractor:
 
         # --- City ---
         # Patterns like "Naya Raipur", "Sector-36, Naya Raipur", "ABC City, State"
+        # NOTE: every pattern here MUST have exactly one capture group, because
+        # _extract_field calls m.group(1). The last pattern is a direct-word match
+        # so we wrap the alternatives in a single capturing group.
         h.city = self._extract_field(text, [
             r'(?:Sector[\-\s]*\d+,\s*)([A-Z][A-Za-z\s]+)(?:,|\n)',   # Sector-36, Naya Raipur
             r'(?:Hospital|Medical|Centre)[^,\n]+,\s*([A-Z][A-Za-z\s]+)(?:,|\n)',
-            r'([A-Z][A-Za-z\s]+)\s*(?:CG|MP|UP|MH|TN|KA|AP|WB|RJ|GJ|HR|PB)\b',  # city followed by state abbr
-            r'\bRaipur\b|\bBilaspur\b|\bMumbai\b|\bDelhi\b|\bChennai\b',          # direct match
+            r'([A-Z][A-Za-z\s]+)\s*(?:CG|MP|UP|MH|TN|KA|AP|WB|RJ|GJ|HR|PB)\b',  # city + state abbr
+            r'\b(Raipur|Bilaspur|Mumbai|Delhi|Chennai|Bengaluru|Kolkata|Hyderabad'  # direct city names
+            r'|Pune|Jaipur|Patna|Lucknow|Bhopal|Indore|Nagpur|Bhubaneswar)\b',
         ]) or ''
 
         # If city matched the full state-pattern, extract just the city part
@@ -697,13 +704,18 @@ class LLMExtractor:
         """
         # Split into pages by our page markers
         pages = re.split(r'--- PAGE (\d+) ---', ocr_text)
-        
+
         # Build page list: [(page_num, text), ...]
+        # re.split with a capturing group produces: ['pre', '1', 'text1', '2', 'text2', ...]
         page_list = []
         i = 1
         while i < len(pages) - 1:
-            page_num = int(pages[i])
-            page_text = pages[i + 1].strip()
+            try:
+                page_num = int(pages[i])
+            except (ValueError, IndexError):
+                i += 1
+                continue
+            page_text = pages[i + 1].strip() if (i + 1) < len(pages) else ''
             page_list.append((page_num, page_text))
             i += 2
         

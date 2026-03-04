@@ -119,12 +119,18 @@ def extract_text_pdf(pdf_path, output_path):
     """Extract text from a text-based PDF using pdftotext."""
     filename = os.path.basename(pdf_path)
     print(f"\n  📄 Extracting: {filename}")
-    
-    result = subprocess.run(
-        ['pdftotext', '-layout', pdf_path, output_path],
-        capture_output=True, text=True
-    )
-    
+
+    try:
+        result = subprocess.run(
+            ['pdftotext', '-layout', pdf_path, output_path],
+            capture_output=True, text=True
+        )
+    except FileNotFoundError:
+        print("    ❌ 'pdftotext' not found. Install poppler-utils:")
+        print("       macOS:  brew install poppler")
+        print("       Linux:  sudo apt-get install poppler-utils")
+        return False
+
     if result.returncode == 0:
         size = os.path.getsize(output_path)
         print(f"    ✅ Saved: {output_path} ({size} bytes)")

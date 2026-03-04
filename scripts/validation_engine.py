@@ -56,12 +56,35 @@ class ValidationEngine:
         self.db_path = db_path or os.path.abspath(DB_PATH)
         self.rules = self._load_rules()
         self._conn = None
-    
+
+    # ----------------------------------------------------------------
+    # Date Parsing Helper
+    # ----------------------------------------------------------------
+
+    @staticmethod
+    def _parse_date(raw: str) -> Optional[datetime]:
+        """
+        Parse a date string that may be in any of these formats:
+          YYYY-MM-DD  (ISO — used internally and by normalised claim dicts)
+          DD/MM/YYYY  DD-MM-YYYY  DD.MM.YYYY
+          DD/MM/YY    DD-MM-YY    DD.MM.YY
+        Returns a datetime object or None if the string cannot be parsed.
+        """
+        if not raw:
+            return None
+        for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y',
+                    '%d/%m/%y', '%d-%m-%y', '%d.%m.%y'):
+            try:
+                return datetime.strptime(raw.strip(), fmt)
+            except ValueError:
+                continue
+        return None
+
     def _load_rules(self) -> Dict:
         """Load validation rules from YAML."""
         with open(self.rules_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
-    
+
     @property
     def conn(self):
         if self._conn is None:
@@ -272,36 +295,37 @@ class ValidationEngine:
         results = []
         referral_date = claim.get('referral_date')
         admission_date = claim.get('admission_date')
-        
+
         if not referral_date or not admission_date:
             return results
-        
-        try:
-            ref_dt = datetime.strptime(referral_date, '%Y-%m-%d')
-            adm_dt = datetime.strptime(admission_date, '%Y-%m-%d')
-            gap = (adm_dt - ref_dt).days
-            
-            if gap > 45:
-                results.append(ValidationResult(
-                    'E004', 'FAIL', 'ERROR',
-                    f"Admission is {gap} days after referral (max 45 days)",
-                    details={'referral_date': referral_date, 'admission_date': admission_date, 'gap_days': gap},
-                    amount_impact=claim.get('claimed_amount', 0)
-                ))
-            elif gap < 0:
-                results.append(ValidationResult(
-                    'E004', 'FAIL', 'ERROR',
-                    f"Admission date ({admission_date}) is BEFORE referral date ({referral_date})",
-                    details={'referral_date': referral_date, 'admission_date': admission_date}
-                ))
-            else:
-                results.append(ValidationResult(
-                    'E004', 'PASS', 'INFO',
-                    f"Referral valid: admission {gap} days after referral (within 45-day limit)"
-                ))
-        except ValueError:
-            pass
-        
+
+        ref_dt = self._parse_date(referral_date)
+        adm_dt = self._parse_date(admission_date)
+
+        if ref_dt is None or adm_dt is None:
+            return results
+
+        gap = (adm_dt - ref_dt).days
+
+        if gap > 45:
+            results.append(ValidationResult(
+                'E004', 'FAIL', 'ERROR',
+                f"Admission is {gap} days after referral (max 45 days)",
+                details={'referral_date': referral_date, 'admission_date': admission_date, 'gap_days': gap},
+                amount_impact=claim.get('claimed_amount', 0)
+            ))
+        elif gap < 0:
+            results.append(ValidationResult(
+                'E004', 'FAIL', 'ERROR',
+                f"Admission date ({admission_date}) is BEFORE referral date ({referral_date})",
+                details={'referral_date': referral_date, 'admission_date': admission_date}
+            ))
+        else:
+            results.append(ValidationResult(
+                'E004', 'PASS', 'INFO',
+                f"Referral valid: admission {gap} days after referral (within 45-day limit)"
+            ))
+
         return results
     
     def _check_cghs_rates(self, claim: Dict) -> List[ValidationResult]:
@@ -362,13 +386,12 @@ class ValidationEngine:
         results = []
         admission_date = claim.get('admission_date')
         discharge_date = claim.get('discharge_date')
-        
+
         if admission_date and discharge_date:
-            try:
-                adm = datetime.strptime(admission_date, '%Y-%m-%d')
-                dis = datetime.strptime(discharge_date, '%Y-%m-%d')
+            adm = self._parse_date(admission_date)
+            dis = self._parse_date(discharge_date)
+            if adm and dis:
                 expected_days = (dis - adm).days
-                
                 billed_days = claim.get('billed_bed_days')
                 if billed_days and billed_days > expected_days:
                     results.append(ValidationResult(
@@ -377,9 +400,7 @@ class ValidationEngine:
                         details={'billed_days': billed_days, 'expected_days': expected_days},
                         amount_impact=0  # Would need room rate to calculate
                     ))
-            except ValueError:
-                pass
-        
+
         return results
     
     def _check_package_rules(self, claim: Dict) -> List[ValidationResult]:
@@ -443,13 +464,12 @@ class ValidationEngine:
         results = []
         admission_date = claim.get('admission_date')
         discharge_date = claim.get('discharge_date')
-        
+
         if admission_date and discharge_date:
-            try:
-                adm = datetime.strptime(admission_date, '%Y-%m-%d')
-                dis = datetime.strptime(discharge_date, '%Y-%m-%d')
+            adm = self._parse_date(admission_date)
+            dis = self._parse_date(discharge_date)
+            if adm and dis:
                 stay = (dis - adm).days
-                
                 if stay > 15:
                     cms_attached = claim.get('cms_approval_attached', False)
                     if not cms_attached:
@@ -463,9 +483,7 @@ class ValidationEngine:
                             'HV002', 'PASS', 'INFO',
                             f"Stay of {stay} days with CMS approval attached."
                         ))
-            except ValueError:
-                pass
-        
+
         return results
     
     def _check_opd_limits(self, claim: Dict) -> List[ValidationResult]:
