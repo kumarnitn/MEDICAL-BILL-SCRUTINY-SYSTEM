@@ -2,7 +2,7 @@
 """
 OCR Script for Scanned Rule Documents
 =======================================
-Uses Tesseract OCR via pdf2image + pytesseract to extract text
+Uses PaddleOCR via pdf2image to extract text
 from scanned PDF rule documents.
 
 Scanned documents:
@@ -17,7 +17,8 @@ Also extracts text from text-based PDFs using pdftotext.
 import os
 import subprocess
 from pdf2image import convert_from_path
-import pytesseract
+from paddleocr import PaddleOCR
+import numpy as np
 from PIL import Image, ImageFilter, ImageEnhance
 
 RULES_DIR = os.path.join(os.path.dirname(__file__), '..', 'Rules')
@@ -49,7 +50,7 @@ def preprocess_image(img):
     - Upscale for better recognition
     """
     # Convert to grayscale
-    img = img.convert('L')
+    img = img.convert('RGB')
     
     # Enhance contrast
     enhancer = ImageEnhance.Contrast(img)
@@ -88,14 +89,19 @@ def ocr_scanned_pdf(pdf_path, output_path):
         
         # Preprocess
         processed_img = preprocess_image(img)
+        img_array = np.array(processed_img)
         
-        # OCR with Tesseract
-        # Use English + preserve layout
-        text = pytesseract.image_to_string(
-            processed_img,
-            lang='eng',
-            config='--psm 6 --oem 3'  # Assume uniform block of text, use LSTM engine
-        )
+        # Initialize OCR Engine locally for the script
+        ocr = PaddleOCR(use_angle_cls=False, lang='en', use_textline_orientation=False, ocr_version='PP-OCRv4', show_log=False)
+        result = ocr.ocr(img_array)
+        
+        text_lines = []
+        if result and result[0]:
+            for line in result[0]:
+                if line and len(line) == 2 and len(line[1]) == 2:
+                    text_lines.append(line[1][0])
+        
+        text = '\n'.join(text_lines)
         
         char_count = len(text.strip())
         print(f"({char_count} chars)")

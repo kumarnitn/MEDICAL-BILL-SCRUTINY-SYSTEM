@@ -26,11 +26,12 @@ from dataclasses import dataclass, field, asdict
 # Check dependencies
 try:
     from pdf2image import convert_from_path
-    import pytesseract
+    from paddleocr import PaddleOCR
+    import numpy as np
     from PIL import Image, ImageFilter, ImageEnhance
 except ImportError as e:
     print(f"Missing dependency: {e}")
-    print("Install with: pip3 install pdf2image pytesseract Pillow")
+    print("Install with: pip3 install pdf2image paddleocr numpy Pillow")
     sys.exit(1)
 
 try:
@@ -136,12 +137,19 @@ class ExtractedBill:
 # ============================================================================
 
 class OCREngine:
-    """Tesseract-based OCR with preprocessing for scanned medical bills."""
+    """PaddleOCR-based text extraction for scanned medical bills."""
     
-    def __init__(self, dpi: int = 150, lang: str = 'eng', max_pages: int = 0):
+    def __init__(self, dpi: int = 150, lang: str = 'en', max_pages: int = 0):
         self.dpi = dpi
         self.lang = lang
         self.max_pages = max_pages  # 0 = all pages
+        # Suppress Paddle logging
+        import logging
+        logging.getLogger('ppocr').setLevel(logging.ERROR)
+        logging.getLogger('paddle').setLevel(logging.ERROR)
+        
+        # Initialize PaddleOCR engine with PP-OCRv4 (much lighter than v5/PaddleX)
+        self.ocr = PaddleOCR(use_textline_orientation=False, lang=self.lang, ocr_version='PP-OCRv4')
     
     def _repair_pdf(self, pdf_path: str) -> str:
         """Repair a damaged PDF using Ghostscript."""
@@ -194,7 +202,7 @@ class OCREngine:
         internally. Contrast boost + sharpen + upscale was adding 200-400ms
         per page with minimal quality benefit on printed hospital bills.
         """
-        img = img.convert('L')
+        img = img.convert('RGB')
         # Only upscale very small images (mobile photos, cropped scans)
         w, h = img.size
         if w < 800:
@@ -203,42 +211,34 @@ class OCREngine:
         return img
     
     def ocr_image(self, img: Image.Image) -> Dict:
-        """OCR a single image, returning text and confidence.
-        
-        PERF: Single image_to_string() call only. Confidence is estimated
-        heuristically from the output text quality (no second Tesseract pass).
-        OEM 1 (LSTM-only) is faster than OEM 3 (auto) on Tesseract 4+.
-        """
+        """OCR a single image using PaddleOCR, returning text and confidence."""
         processed = self.preprocess_image(img)
+        # PaddleOCR expects a numpy array
+        img_array = np.array(processed)
         
-        text = pytesseract.image_to_string(
-            processed, lang=self.lang,
-            config='--psm 6 --oem 1'
-        )
+        # Run OCR
+        result = self.ocr.ocr(img_array)
         
-        # Estimate confidence heuristically from output text quality
-        # (avoids a second expensive Tesseract call just for confidence %)
-        avg_conf = self._estimate_confidence(text)
+        text_lines = []
+        confidences = []
+        
+        # PaddleOCR returns [[[box], [text, confidence]], ...]
+        if result and result[0]:
+            for line in result[0]:
+                if line and len(line) == 2 and len(line[1]) == 2:
+                    text_lines.append(line[1][0])
+                    confidences.append(line[1][1])
+        
+        text = '\n'.join(text_lines)
+        # Convert 0-1 confidence to 0-100%
+        avg_conf = sum(confidences) / len(confidences) * 100 if confidences else 0
         
         return {
             'text': text,
             'confidence': avg_conf,
         }
     
-    @staticmethod
-    def _estimate_confidence(text: str) -> float:
-        """Estimate OCR confidence from text quality without a second Tesseract call.
-        
-        Heuristic: count the fraction of 'word-like' tokens (3+ alpha chars)
-        vs garbage tokens (short, non-alpha, special chars). This correlates
-        well with Tesseract's per-word confidence average.
-        """
-        import re
-        words = text.split()
-        if not words:
-            return 0.0
-        good = sum(1 for w in words if len(w) >= 3 and re.match(r'^[A-Za-z]', w))
-        return min(95.0, max(10.0, (good / len(words)) * 100))
+
     
     def extract_from_pdf(self, pdf_path: str) -> Dict:
         """Extract all text from a PDF.
@@ -285,15 +285,8 @@ class OCREngine:
         # Step 3: Process in batches with PARALLEL OCR within each batch
         from concurrent.futures import ThreadPoolExecutor
         
-        all_text = [None] * pages_to_process  # pre-allocate for parallel
+        all_text = [None] * pages_to_process
         total_conf = 0
-        
-        def _ocr_one(args):
-            """OCR a single page — runs in thread pool."""
-            local_idx, img = args
-            result = self.ocr_image(img)
-            img.close()
-            return local_idx, result
         
         for batch_start in range(1, pages_to_process + 1, BATCH_SIZE):
             batch_end = min(batch_start + BATCH_SIZE - 1, pages_to_process)
@@ -304,15 +297,20 @@ class OCREngine:
                 pdf_path, first_page=batch_start, last_page=batch_end
             )
             
-            # Parallel OCR — Tesseract releases the GIL during its C processing
-            print(f"    OCR pages {batch_start}-{batch_end} ({batch_count} pages, parallel)...", flush=True)
-            workers = min(batch_count, 4)  # cap at 4 threads
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                for local_idx, result in pool.map(_ocr_one, enumerate(images)):
-                    page_num = batch_start + local_idx
-                    all_text[page_num - 1] = f"--- PAGE {page_num} ---\n{result['text']}"
-                    total_conf += result['confidence']
-                    print(f"      Page {page_num}: {len(result['text'])} chars, {result['confidence']:.0f}%")
+            print(f"    OCR pages {batch_start}-{batch_end} ({batch_count} pages)...", flush=True)
+            
+            for local_idx, img in enumerate(images):
+                page_num = batch_start + local_idx
+                global_idx = page_num - 1
+                
+                result = self.ocr_image(img)
+                img.close()
+                
+                all_text[global_idx] = f"--- PAGE {page_num} ---\n{result['text']}"
+                total_conf += result['confidence']
+                chars = len(result['text'])
+                conf = result['confidence']
+                print(f"      Page {page_num}: {chars} chars, conf={conf:.0f}%")
             
             del images
             gc.collect()

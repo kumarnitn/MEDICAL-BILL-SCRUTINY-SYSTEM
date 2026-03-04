@@ -3,15 +3,16 @@ fastapi==0.109.2
 uvicorn[standard]==0.27.1
 python-multipart==0.0.9
 pdf2image==1.17.0
-pytesseract==0.3.10
+paddlepaddle
+paddleocr
+numpy
 Pillow==10.2.0
 requests==2.31.0
 PyYAML==6.0.1
 
 # NOTE: The following system binaries are also required but are not pip-installable:
-#   macOS:  brew install poppler ghostscript tesseract
-#   Linux:  sudo apt-get install poppler-utils ghostscript tesseract-ocr
+#   macOS:  brew install poppler ghostscript
+#   Linux:  sudo apt-get install poppler-utils ghostscript
 #
 # - poppler   : provides pdftotext (used by parse_hospital_list.py, ocr_rules.py)
 # - ghostscript: provides gs (used for PDF repair in extract_bill.py)
-# - tesseract : provides the OCR engine called by pytesseract
