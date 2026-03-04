@@ -461,7 +461,7 @@ def save_to_sqlite(entries, db_path):
     with_rates = c.execute('SELECT COUNT(*) FROM cghs_rates WHERE non_nabh_rate IS NOT NULL').fetchone()[0]
     
     print(f"\n✅ SQLite: {total} entries → {db_path}")
-    print(f"   Rates present: {with_rates}/{total} ({100*with_rates//total}%)")
+    print(f"   Rates present: {with_rates}/{total} ({100*with_rates//max(total,1)}%)")
     
     cats = c.execute('SELECT category, COUNT(*) FROM cghs_rates GROUP BY category ORDER BY MIN(id)').fetchall()
     print(f"\n   Categories ({len(cats)}):")

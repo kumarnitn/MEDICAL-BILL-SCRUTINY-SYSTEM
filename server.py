@@ -322,7 +322,7 @@ async def search_hospitals(q: str = Query(..., min_length=2)):
         c = conn.cursor()
         
         rows = c.execute("""
-            SELECT hospital_name, city, state, nabh_status, empanelled_for
+            SELECT hospital_name, city, nabh_status, empanelled_for
             FROM hospitals 
             WHERE hospital_name LIKE ? OR city LIKE ?
             LIMIT 10
@@ -335,9 +335,8 @@ async def search_hospitals(q: str = Query(..., min_length=2)):
             results.append({
                 "name": row[0],
                 "city": row[1],
-                "state": row[2],
-                "nabh_status": row[3],
-                "empanelled_for": row[4],
+                "nabh_status": row[2],
+                "empanelled_for": row[3],
             })
         
         return {"query": q, "results": results, "count": len(results)}
