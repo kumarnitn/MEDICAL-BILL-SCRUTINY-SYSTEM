@@ -394,7 +394,7 @@ function renderBillDetail() {
 
     // Restore the full detail container HTML structure if it was replaced by empty state
     const container = $('#bill-detail-container');
-    if (container && container.querySelector('.empty-state')) {
+    if (container && !container.querySelector('#p-name')) {
         // Re-render the real detail skeleton first
         _restoreDetailSkeleton(container);
     }
