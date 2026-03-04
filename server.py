@@ -18,6 +18,7 @@ Start with:
 
 import os
 import sys
+import gc
 import json
 import time
 import uuid
@@ -66,19 +67,33 @@ app.add_middleware(
 processing_jobs: Dict[str, dict] = {}
 processed_bills: List[dict] = []
 
+# Memory config — Render free tier has 512MB
+MAX_BILLS_IN_MEMORY = 50
+MAX_UPLOAD_MB = 20
+JOB_CLEANUP_SECONDS = 300  # 5 minutes
+
 # Load any previously processed bills on startup
 def _load_existing_bills():
-    """Load previously processed bill JSONs from disk."""
+    """Load previously processed bill JSONs from disk.
+    
+    MEMORY: Strips raw_ocr_text (100KB+ per bill) and limits to the
+    most recent MAX_BILLS_IN_MEMORY bills to stay within 512MB on Render.
+    """
     global processed_bills
     if os.path.exists(BILLS_JSON_DIR):
-        for fname in sorted(os.listdir(BILLS_JSON_DIR)):
+        files = sorted(os.listdir(BILLS_JSON_DIR))
+        # Only load the most recent N bills
+        for fname in files[-MAX_BILLS_IN_MEMORY:]:
             if fname.endswith('.json'):
                 try:
                     with open(os.path.join(BILLS_JSON_DIR, fname), 'r') as f:
                         bill_data = json.load(f)
+                        # Strip heavy fields to save RAM
+                        bill_data.pop('raw_ocr_text', None)
                         processed_bills.append(bill_data)
                 except Exception as e:
                     print(f"[WARN] Could not load {fname}: {e}")
+    print(f"[STARTUP] Loaded {len(processed_bills)} bills into memory")
 
 _load_existing_bills()
 
@@ -163,16 +178,23 @@ async def upload_bill(
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
     
+    # Check file size before reading (prevent OOM on huge uploads)
+    content = await file.read()
+    file_size_mb = len(content) / (1024 * 1024)
+    if file_size_mb > MAX_UPLOAD_MB:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({file_size_mb:.1f}MB). Maximum is {MAX_UPLOAD_MB}MB."
+        )
+    
     # Save uploaded file
     file_id = str(uuid.uuid4())[:8]
     safe_name = file.filename.replace(' ', '_').replace('(', '').replace(')', '')
     saved_path = os.path.join(UPLOADS_DIR, f"{file_id}_{safe_name}")
     
-    content = await file.read()
     with open(saved_path, 'wb') as f:
         f.write(content)
-    
-    file_size_mb = len(content) / (1024 * 1024)
+    del content  # free upload buffer immediately
     
     # Create job
     job_id = str(uuid.uuid4())[:12]
@@ -574,30 +596,54 @@ async def _process_bill_async(job_id: str):
         base = confidence / 100.0  # overall OCR confidence as 0-1
         bill_dict["confidence_scores"] = _compute_confidence_scores(bill, base)
 
-        # Save to disk
+        # Save to disk (full data including raw_ocr_text)
         bill_json_path = os.path.join(BILLS_JSON_DIR, f"{bill_id}.json")
         with open(bill_json_path, 'w', encoding='utf-8') as f:
             json.dump(bill_dict, f, indent=2, default=str)
 
-        # Add to in-memory list — store a copy to prevent shared-reference mutation
-        processed_bills.append(dict(bill_dict))
+        # MEMORY: Strip heavy fields before storing in RAM
+        bill_dict.pop('raw_ocr_text', None)
 
-        # Mark job complete — store a separate copy for the job result
+        # Add to in-memory list — cap size to prevent unbounded growth
+        processed_bills.append(dict(bill_dict))
+        while len(processed_bills) > MAX_BILLS_IN_MEMORY:
+            processed_bills.pop(0)
+
+        # Mark job complete — store a copy WITHOUT raw_ocr_text
         job["status"] = "completed"
         job["progress"] = 100
         job["result"] = dict(bill_dict)
+        
+        # Force garbage collection to free PIL images, Tesseract buffers, etc.
+        gc.collect()
         
     except Exception as e:
         job["status"] = "failed"
         job["error"] = str(e)
         tb = traceback.format_exc()
         print(f"[ERROR] Job {job_id} failed: {e}\n{tb}")
+        gc.collect()
         
         # Mark current step as failed
         for step in job["steps"]:
             if step["status"] == "active":
                 step["status"] = "failed"
                 step["message"] = f"Error: {str(e)[:200]}"
+    
+    # Schedule job cleanup to free memory after JOB_CLEANUP_SECONDS
+    asyncio.get_event_loop().call_later(
+        JOB_CLEANUP_SECONDS,
+        lambda jid=job_id: _cleanup_job(jid)
+    )
+
+
+def _cleanup_job(job_id: str):
+    """Remove completed/failed job from memory after timeout."""
+    job = processing_jobs.pop(job_id, None)
+    if job:
+        job.pop('result', None)  # free the largest field first
+        print(f"[CLEANUP] Freed job {job_id}")
+        gc.collect()
 
 
 def _compute_confidence_scores(bill, base_confidence: float) -> dict:

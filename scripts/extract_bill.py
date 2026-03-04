@@ -162,8 +162,16 @@ class OCREngine:
         return pdf_path
     
     def pdf_to_images(self, pdf_path: str, first_page: int = None, last_page: int = None) -> List[Image.Image]:
-        """Convert PDF pages to images. Falls back to Ghostscript repair for damaged PDFs."""
-        kwargs = {'dpi': self.dpi}
+        """Convert PDF pages to images. Falls back to Ghostscript repair for damaged PDFs.
+        
+        MEMORY: Uses JPEG format (1-2MB/page) instead of default PPM (25MB/page).
+        Also limits poppler to 1 thread to avoid memory spikes.
+        """
+        kwargs = {
+            'dpi': self.dpi,
+            'fmt': 'jpeg',        # ~10x less memory than PPM
+            'thread_count': 1,    # prevent memory spikes from parallel rendering
+        }
         if first_page:
             kwargs['first_page'] = first_page
         if last_page:
@@ -172,7 +180,7 @@ class OCREngine:
         try:
             return convert_from_path(pdf_path, **kwargs)
         except Exception as e:
-            print(f"    ⚠️ pdf2image failed: {e}")
+            print(f"    pdf2image failed: {e}")
             print(f"    Attempting PDF repair...")
             repaired = self._repair_pdf(pdf_path)
             if repaired != pdf_path:
