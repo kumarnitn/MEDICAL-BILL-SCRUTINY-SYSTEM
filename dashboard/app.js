@@ -922,7 +922,7 @@ const upload = {
         });
 
         const useLLM = $('#opt-llm')?.checked ?? true;
-        const dpi = parseInt($('#opt-dpi')?.value || '200');
+        const dpi = parseInt($('#opt-dpi')?.value || '150');
         const maxPages = parseInt($('#opt-pages')?.value || '20');
         const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
 

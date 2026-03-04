@@ -138,7 +138,7 @@ class ExtractedBill:
 class OCREngine:
     """Tesseract-based OCR with preprocessing for scanned medical bills."""
     
-    def __init__(self, dpi: int = 200, lang: str = 'eng', max_pages: int = 0):
+    def __init__(self, dpi: int = 150, lang: str = 'eng', max_pages: int = 0):
         self.dpi = dpi
         self.lang = lang
         self.max_pages = max_pages  # 0 = all pages
@@ -188,25 +188,18 @@ class OCREngine:
             raise
     
     def preprocess_image(self, img: Image.Image) -> Image.Image:
-        """Enhance image for better OCR.
+        """Minimal preprocessing — grayscale only.
         
-        PERF: At 200 DPI an A4 page is 1654×2339px. The old code upscaled
-        anything below 2000px using slow LANCZOS — this hit EVERY page.
-        Now only upscales truly small/cropped images (<1200px) using
-        faster BILINEAR resampling, and skips SHARPEN for larger images.
+        PERF: Tesseract's LSTM engine (OEM 1) handles contrast and noise
+        internally. Contrast boost + sharpen + upscale was adding 200-400ms
+        per page with minimal quality benefit on printed hospital bills.
         """
-        # Grayscale
         img = img.convert('L')
-        # Enhance contrast
-        enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(1.5)
-        # Upscale only truly small images (e.g. cropped scans, mobile photos)
+        # Only upscale very small images (mobile photos, cropped scans)
         w, h = img.size
-        if w < 1200:
-            scale = 1200 / w
+        if w < 800:
+            scale = 800 / w
             img = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
-            # Only sharpen upscaled images — adds ~100ms per page on large images
-            img = img.filter(ImageFilter.SHARPEN)
         return img
     
     def ocr_image(self, img: Image.Image) -> Dict:
@@ -261,7 +254,7 @@ class OCREngine:
         """
         import gc
         
-        BATCH_SIZE = 5  # pages per poppler invocation — good speed/memory tradeoff
+        BATCH_SIZE = 10  # pages per poppler invocation — fewer calls = faster
         
         print(f"    Converting PDF to images (DPI={self.dpi})...")
         
@@ -289,36 +282,44 @@ class OCREngine:
             pages_to_process = self.max_pages
             print(f"    Limiting OCR to first {pages_to_process} pages (of {total_pages})")
         
-        # Step 3: Process in batches to keep memory low
-        all_text = []
+        # Step 3: Process in batches with PARALLEL OCR within each batch
+        from concurrent.futures import ThreadPoolExecutor
+        
+        all_text = [None] * pages_to_process  # pre-allocate for parallel
         total_conf = 0
+        
+        def _ocr_one(args):
+            """OCR a single page — runs in thread pool."""
+            local_idx, img = args
+            result = self.ocr_image(img)
+            img.close()
+            return local_idx, result
         
         for batch_start in range(1, pages_to_process + 1, BATCH_SIZE):
             batch_end = min(batch_start + BATCH_SIZE - 1, pages_to_process)
+            batch_count = batch_end - batch_start + 1
             
-            # Render only this batch's pages
+            # Render this batch
             images = self.pdf_to_images(
                 pdf_path, first_page=batch_start, last_page=batch_end
             )
             
-            # OCR each page in the batch
-            for j, img in enumerate(images):
-                page_num = batch_start + j
-                print(f"    OCR page {page_num}/{pages_to_process}...", end=' ', flush=True)
-                result = self.ocr_image(img)
-                img.close()  # free immediately
-                print(f"({len(result['text'])} chars, conf={result['confidence']:.0f}%)")
-                
-                all_text.append(f"--- PAGE {page_num} ---\n{result['text']}")
-                total_conf += result['confidence']
+            # Parallel OCR — Tesseract releases the GIL during its C processing
+            print(f"    OCR pages {batch_start}-{batch_end} ({batch_count} pages, parallel)...", flush=True)
+            workers = min(batch_count, 4)  # cap at 4 threads
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for local_idx, result in pool.map(_ocr_one, enumerate(images)):
+                    page_num = batch_start + local_idx
+                    all_text[page_num - 1] = f"--- PAGE {page_num} ---\n{result['text']}"
+                    total_conf += result['confidence']
+                    print(f"      Page {page_num}: {len(result['text'])} chars, {result['confidence']:.0f}%")
             
-            # Free the entire batch
             del images
             gc.collect()
         
-        processed_count = len(all_text)
+        processed_count = sum(1 for t in all_text if t is not None)
         avg_confidence = total_conf / processed_count if processed_count else 0
-        full_text = '\n\n'.join(all_text)
+        full_text = '\n\n'.join(t for t in all_text if t is not None)
         
         return {
             'text': full_text,
@@ -1301,7 +1302,7 @@ Examples:
     parser.add_argument('pdf_path', help='Path to the medical bill PDF')
     parser.add_argument('--no-llm', action='store_true', help='Skip LLM, use rule-based extraction only')
     parser.add_argument('--model', default=DEFAULT_MODEL, help=f'Ollama model name (default: {DEFAULT_MODEL})')
-    parser.add_argument('--dpi', type=int, default=200, help='OCR DPI (default: 200)')
+    parser.add_argument('--dpi', type=int, default=150, help='OCR DPI (default: 150)')
     parser.add_argument('--max-pages', type=int, default=20, help='Max pages to OCR (default: 20, 0=all)')
     
     args = parser.parse_args()

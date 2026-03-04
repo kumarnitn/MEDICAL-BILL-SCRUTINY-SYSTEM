@@ -171,7 +171,7 @@ async def get_bill(bill_id: str):
 async def upload_bill(
     file: UploadFile = File(...),
     use_llm: bool = Query(True, description="Use AI model for extraction"),
-    dpi: int = Query(200, description="OCR resolution"),
+    dpi: int = Query(150, description="OCR resolution"),
     max_pages: int = Query(20, description="Max pages to process (0 = all)"),
 ):
     """Upload a PDF bill for processing. Returns a job ID for progress tracking."""
