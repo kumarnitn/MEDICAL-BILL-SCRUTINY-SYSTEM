@@ -92,7 +92,7 @@ def ocr_scanned_pdf(pdf_path, output_path):
         img_array = np.array(processed_img)
         
         # Initialize OCR Engine locally for the script
-        ocr = PaddleOCR(use_angle_cls=False, lang='en', use_textline_orientation=False, ocr_version='PP-OCRv4', show_log=False)
+        ocr = PaddleOCR(use_textline_orientation=False, lang='en', ocr_version='PP-OCRv4')
         result = ocr.ocr(img_array)
         
         text_lines = []

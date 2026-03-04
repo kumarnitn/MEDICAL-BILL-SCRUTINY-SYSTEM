@@ -3,9 +3,9 @@ fastapi==0.109.2
 uvicorn[standard]==0.27.1
 python-multipart==0.0.9
 pdf2image==1.17.0
-paddlepaddle
-paddleocr
-numpy
+paddlepaddle==3.3.0
+paddleocr==3.4.0
+numpy>=1.24,<3
 Pillow==10.2.0
 requests==2.31.0
 PyYAML==6.0.1
