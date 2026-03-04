@@ -69,7 +69,7 @@ processed_bills: List[dict] = []
 
 # Memory config — Render free tier has 512MB
 MAX_BILLS_IN_MEMORY = 50
-MAX_UPLOAD_MB = 20
+MAX_UPLOAD_MB = 50
 JOB_CLEANUP_SECONDS = 300  # 5 minutes
 
 # Load any previously processed bills on startup

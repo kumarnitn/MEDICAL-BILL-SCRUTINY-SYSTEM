@@ -250,47 +250,71 @@ class OCREngine:
     def extract_from_pdf(self, pdf_path: str) -> Dict:
         """Extract all text from a PDF.
         
-        PERF: Converts all pages in a SINGLE poppler call (fast — one
-        subprocess invocation) then OCRs them one at a time, freeing each
-        image after processing to control memory.
+        MEMORY-SAFE: Processes in batches of 5 pages to keep peak memory
+        at ~55MB regardless of PDF length. A 120-page bill at 200 DPI would
+        need ~1.3GB if all pages were rendered at once.
         
-        The previous page-by-page convert_from_path approach was actually
-        SLOWER because each call re-opens the PDF, re-initialises poppler,
-        and seeks to the target page — N subprocess invocations vs 1.
+        Strategy:
+        1. pdfinfo_from_path() — gets page count without rendering (zero RAM)
+        2. Batch loop: convert 5 pages → OCR each → free all → next batch
+        3. Only converts pages that will actually be OCR'd (respects max_pages)
         """
+        import gc
+        
+        BATCH_SIZE = 5  # pages per poppler invocation — good speed/memory tradeoff
+        
         print(f"    Converting PDF to images (DPI={self.dpi})...")
         
-        # Convert ALL pages in one poppler call — much faster than per-page
-        images = self.pdf_to_images(pdf_path)
-        total_pages = len(images)
+        # Step 1: Get page count WITHOUT rendering any images
+        try:
+            from pdf2image.pdf2image import pdfinfo_from_path
+            info = pdfinfo_from_path(pdf_path)
+            total_pages = info.get('Pages', 0)
+        except Exception:
+            # Fallback: render just page 1 to probe
+            probe = self.pdf_to_images(pdf_path, first_page=1, last_page=1)
+            total_pages = len(probe) if probe else 0
+            for p in probe:
+                p.close()
+            del probe
+        
+        if total_pages == 0:
+            raise RuntimeError("Could not read any pages from PDF")
+        
         print(f"    Found {total_pages} pages")
         
-        # Limit pages if configured
+        # Step 2: Determine how many pages to actually process
+        pages_to_process = total_pages
         if self.max_pages > 0 and total_pages > self.max_pages:
-            print(f"    Limiting OCR to first {self.max_pages} pages (of {total_pages})")
-            # Free the images we won't process
-            for img in images[self.max_pages:]:
-                img.close()
-            images = images[:self.max_pages]
+            pages_to_process = self.max_pages
+            print(f"    Limiting OCR to first {pages_to_process} pages (of {total_pages})")
         
+        # Step 3: Process in batches to keep memory low
         all_text = []
         total_conf = 0
-        pages_to_process = len(images)
         
-        for i in range(pages_to_process):
-            page_num = i + 1
-            print(f"    OCR page {page_num}/{pages_to_process}...", end=' ', flush=True)
-            result = self.ocr_image(images[i])
-            # Free image memory immediately after OCR — critical for large PDFs
-            images[i].close()
-            images[i] = None
-            print(f"({len(result['text'])} chars, conf={result['confidence']:.0f}%)")
+        for batch_start in range(1, pages_to_process + 1, BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE - 1, pages_to_process)
             
-            all_text.append(f"--- PAGE {page_num} ---\n{result['text']}")
-            total_conf += result['confidence']
-        
-        # Clean up any remaining references
-        del images
+            # Render only this batch's pages
+            images = self.pdf_to_images(
+                pdf_path, first_page=batch_start, last_page=batch_end
+            )
+            
+            # OCR each page in the batch
+            for j, img in enumerate(images):
+                page_num = batch_start + j
+                print(f"    OCR page {page_num}/{pages_to_process}...", end=' ', flush=True)
+                result = self.ocr_image(img)
+                img.close()  # free immediately
+                print(f"({len(result['text'])} chars, conf={result['confidence']:.0f}%)")
+                
+                all_text.append(f"--- PAGE {page_num} ---\n{result['text']}")
+                total_conf += result['confidence']
+            
+            # Free the entire batch
+            del images
+            gc.collect()
         
         processed_count = len(all_text)
         avg_confidence = total_conf / processed_count if processed_count else 0
